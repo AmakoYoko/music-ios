@@ -1,0 +1,27 @@
+name: build
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  ipa:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: brew install xcodegen && xcodegen generate
+      - name: Compilation (sans signature, SideStore/LiveContainer re-signent)
+        run: |
+          xcodebuild -project LamasMusic.xcodeproj -scheme LamasMusic -configuration Release \
+            -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build | xcpretty || exit ${PIPESTATUS[0]}
+          mkdir Payload && cp -R build/Build/Products/Release-iphoneos/LamasMusic.app Payload/
+          zip -qry LamasMusic.ipa Payload
+      - uses: actions/upload-artifact@v4
+        with: { name: LamasMusic, path: LamasMusic.ipa }
+      - name: Publication (release « latest »)
+        env: { GH_TOKEN: "${{ github.token }}" }
+        run: |
+          gh release delete latest -y --cleanup-tag || true
+          gh release create latest LamasMusic.ipa -t "Music ${{ github.run_number }}" -n "Build ${{ github.sha }}"
