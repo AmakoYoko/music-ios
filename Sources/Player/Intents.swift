@@ -59,7 +59,7 @@ struct PlayPlaylistIntent: AudioPlaybackIntent {
         // playlists Music, puis albums et playlists téléchargés, puis la recherche
         if let m = await Library.shared.refreshMine().first(where: { fold($0.title).contains(n) }) {
             let p = try await Library.shared.mpl(m.id)
-            await MainActor.run { Player.shared.playList(p.tracks, source: Source(title: m.title, href: "#/mpl/\(m.id)")) }
+            await MainActor.run { Player.shared.playList(p.tracks ?? [], source: Source(title: m.title, href: "#/mpl/\(m.id)")) }
             return .result(dialog: "Je lance \(m.title).")
         }
         let off = await MainActor.run { (Offline.shared.collections, Offline.shared.tracks) }
