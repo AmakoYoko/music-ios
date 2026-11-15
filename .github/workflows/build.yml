@@ -27,7 +27,7 @@ jobs:
           set -o pipefail
           xcodebuild -project LamasMusic.xcodeproj -scheme LamasMusic -configuration Release \
             -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build \
-            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CURRENT_PROJECT_VERSION=${{ github.run_number }} build 2>&1 | tee build.log | xcpretty || { grep -E 'error:|❌' build.log | sort -u | head -80; exit 1; }
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO MARKETING_VERSION=1.0.${{ github.run_number }} CURRENT_PROJECT_VERSION=${{ github.run_number }} build 2>&1 | tee build.log | xcpretty || { grep -E 'error:|❌' build.log | sort -u | head -80; exit 1; }
           mkdir Payload && cp -R build/Build/Products/Release-iphoneos/LamasMusic.app Payload/
           # droits (groupe d'applis du widget) inscrits sans certificat : SideStore les reprend en signant
           brew install ldid >/dev/null
@@ -39,5 +39,18 @@ jobs:
       - name: Publication (release « latest »)
         env: { GH_TOKEN: "${{ github.token }}" }
         run: |
+          # source SideStore/AltStore : les mises à jour apparaissent dans l'appli
+          BASE=https://github.com/${{ github.repository }}/releases/download/latest
+          cp Sources/Assets.xcassets/AppIcon.appiconset/icon.png icon.png
+          jq -n --arg v "1.0.${{ github.run_number }}" --arg b "${{ github.run_number }}" --arg base "$BASE" \
+            --arg date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --argjson size "$(stat -f%z LamasMusic.ipa)" \
+            --arg msg "$(git log -1 --format=%s)" '{
+              name: "Lamas", identifier: "one.lamas.source", iconURL: "\($base)/icon.png",
+              apps: [{ name: "Music", bundleIdentifier: "one.lamas.music", developerName: "Lamas",
+                localizedDescription: "Lecteur Lamas Music.", iconURL: "\($base)/icon.png", tintColor: "fa233b",
+                versions: [{ version: $v, buildVersion: $b, date: $date, size: $size,
+                  downloadURL: "\($base)/LamasMusic.ipa", localizedDescription: $msg, minOSVersion: "17.0" }],
+                appPermissions: { entitlements: [], privacy: {} } }],
+              news: [] }' > source.json
           gh release delete latest -y --cleanup-tag || true
-          gh release create latest LamasMusic.ipa -t "Music ${{ github.run_number }}" -n "Build ${{ github.sha }}"
+          gh release create latest LamasMusic.ipa source.json icon.png -t "Music ${{ github.run_number }}" -n "Build ${{ github.sha }}"
