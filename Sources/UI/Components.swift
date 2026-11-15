@@ -165,7 +165,7 @@ struct Tile: View {
     }
 }
 
-func playCollection(_ it: JSON, _ k: Kind, shuffle: Bool = false) async {
+@MainActor func playCollection(_ it: JSON, _ k: Kind, shuffle: Bool = false) async {
     do {
         switch k {
         case .song: if let t = track(it) { Player.shared.playRadio(t) }

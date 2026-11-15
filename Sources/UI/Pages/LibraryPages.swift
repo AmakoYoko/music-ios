@@ -4,7 +4,10 @@ import SwiftUI
 /// Saisie de texte (nouvelle playlist, renommer…).
 @MainActor @Observable final class Prompt {
     static let shared = Prompt()
-    var title = "", value = "", ok = "OK", placeholder = ""
+    var title = ""
+    var value = ""
+    var ok = "OK"
+    var placeholder = ""
     var shown = false
     var run: ((String) -> Void)?
     static func ask(_ title: String, value: String = "", placeholder: String = "", ok: String = "OK", run: @escaping (String) -> Void) {
@@ -13,7 +16,7 @@ import SwiftUI
     }
 }
 
-func newPlaylist(_ ts: [Track] = [], open: Bool = true) {
+@MainActor func newPlaylist(_ ts: [Track] = [], open: Bool = true) {
     Prompt.ask("Nouvelle playlist", placeholder: "Nom de la playlist", ok: "Créer") { title in
         guard !title.trimmingCharacters(in: .whitespaces).isEmpty else { return }
         Task {

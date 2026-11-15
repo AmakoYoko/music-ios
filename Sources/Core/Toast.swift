@@ -12,7 +12,7 @@ import Observation
     var current: Item?
     private var task: Task<Void, Never>?
 
-    static func show(_ text: String, _ kind: Kind = .info, action: String? = nil, seconds: Double = 3, run: (() -> Void)? = nil) {
+    nonisolated static func show(_ text: String, _ kind: Kind = .info, action: String? = nil, seconds: Double = 3, run: (() -> Void)? = nil) {
         Task { @MainActor in shared.present(Item(text: text, kind: kind, action: action, run: run), seconds) }
     }
     private func present(_ i: Item, _ s: Double) {
