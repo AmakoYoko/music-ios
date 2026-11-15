@@ -1,6 +1,11 @@
 import SwiftUI
 
 struct RadioPage: View {
+    func renew() {
+        Router.shared.confirm = Confirm(title: "Changer l'adresse ?", message: "L'ancienne cessera de fonctionner partout où elle est enregistrée.", ok: "Changer", danger: false) {
+            Task { do { try await Radio.shared.renew(); Toast.show("Nouvelle adresse prête", .ok) } catch { Toast.show(error.localizedDescription, .err) } }
+        }
+    }
     @State private var radio = Radio.shared
     @State private var player = Player.shared
     var body: some View {
@@ -10,7 +15,7 @@ struct RadioPage: View {
                 VStack(spacing: 12) {
                     RemoteImage(url: liveImg(n["thumb"].string)).frame(width: 250, height: 250).cardShape(12).shadow(radius: 14, y: 6)
                     HStack(spacing: 6) { LiveDot(); Text("En direct · Music Live").font(.footnote.weight(.semibold)).foregroundStyle(.secondary) }
-                    Text(n["title"].string ?? "La radio démarre…").font(.title2.bold()).multilineTextAlignment(.center)
+                    Text(n["title"].string ?? "La radio démarre…").font(.title2.bold()).multilineTextAlignment(.center).lineLimit(2).fixedSize(horizontal: false, vertical: true)
                     Text(n["artist"].string ?? "").font(.title3).foregroundStyle(Color.accent)
                     Button { radio.toggle() } label: {
                         if radio.loading { Label("Connexion…", systemImage: "hourglass") }
@@ -23,6 +28,7 @@ struct RadioPage: View {
                 if !d["recent"].array.isEmpty { H2(title: "Déjà passés"); ForEach(Array(d["recent"].array.enumerated()), id: \.offset) { _, t in LiveRow(t: t) } }
                 H2(title: "Écouter hors de l'appli")
                 Text("Adresse à coller dans VLC, Home Assistant ou la voiture. Elle fonctionne sans connexion : ne la partage pas.").font(.subheadline).foregroundStyle(.secondary)
+                ViewThatFits {
                 HStack {
                     Button { UIPasteboard.general.string = d["url"].string; Toast.show("Adresse copiée", .ok) } label: { Label("Copier l'adresse", systemImage: "doc.on.doc") }
                     Button {
@@ -30,6 +36,11 @@ struct RadioPage: View {
                             Task { do { try await radio.renew(); Toast.show("Nouvelle adresse prête", .ok) } catch { Toast.show(error.localizedDescription, .err) } }
                         }
                     } label: { Label("Changer l'adresse", systemImage: "arrow.clockwise") }
+                }
+                VStack(alignment: .leading) {
+                    Button { UIPasteboard.general.string = d["url"].string; Toast.show("Adresse copiée", .ok) } label: { Label("Copier l'adresse", systemImage: "doc.on.doc") }
+                    Button { renew() } label: { Label("Changer l'adresse", systemImage: "arrow.clockwise") }
+                }
                 }
                 .buttonStyle(.bordered).padding(.top, 10)
             }

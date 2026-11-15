@@ -11,7 +11,6 @@ struct DevicePicker: View {
                     row(id: live.me, name: "\(live.name) (cet appareil)", kind: live.kind)
                     ForEach(live.devices.filter { $0.id != live.me }) { d in row(id: d.id, name: d.name, kind: d.kind) }
                 } footer: { Text(live.connected ? "Les appareils où Music est ouverte apparaissent ici." : "Connexion à la synchro…") }
-                Section { HStack { Image(systemName: "airplayaudio"); Text("AirPlay et Bluetooth"); Spacer(); AirPlayButton().frame(width: 30, height: 30) } }
             }
             .navigationTitle("Appareil de sortie").navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("OK") { dismiss() } } }

@@ -302,6 +302,7 @@ struct Page<Content: View>: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) { content() }
                 .padding(.horizontal, 16).padding(.bottom, 120)
+                .containerRelativeFrame(.horizontal) // jamais plus large que l'écran
         }
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(large ? .large : .inline)

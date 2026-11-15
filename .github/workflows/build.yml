@@ -10,7 +10,18 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
-      - run: brew install xcodegen && xcodegen generate
+      - name: Icône (rendue depuis l'icône de la PWA)
+        run: brew install librsvg xcodegen && rsvg-convert -w 1024 -h 1024 -b '#fa233b' Resources/icon.svg -o Sources/Assets.xcassets/AppIcon.appiconset/icon.png
+      - run: xcodegen generate
+      - name: Tests (simulateur iPhone)
+        run: |
+          set -o pipefail
+          brew install ffmpeg >/dev/null
+          mkdir -p /tmp/music-test
+          # MP4 fragmenté comme les fichiers du cache du serveur (DASH)
+          ffmpeg -loglevel error -f lavfi -i "sine=frequency=440:duration=6" -ac 2 -c:a aac -b:a 128k -f mp4 -movflags +frag_keyframe+empty_moov+default_base_moof -frag_duration 1000000 /tmp/music-test/frag.m4a
+          UDID=$(xcrun simctl list devices available | grep -m1 -E "iPhone [0-9]+ " | grep -oE "[0-9A-F-]{36}")
+          xcodebuild test -project LamasMusic.xcodeproj -scheme LamasMusic -destination "id=$UDID" -derivedDataPath build-test CODE_SIGNING_ALLOWED=NO 2>&1 | tee test.log | xcpretty || { grep -E "error:|failed|XCTAssert|❌" test.log | sort -u | head -60; exit 1; }
       - name: Compilation (sans signature, SideStore/LiveContainer re-signent)
         run: |
           set -o pipefail

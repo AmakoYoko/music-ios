@@ -1,5 +1,3 @@
-import AVKit
-import MediaPlayer
 import SwiftUI
 
 struct MiniPlayer: View {
@@ -51,7 +49,8 @@ struct PlayPauseButton: View {
     }
 }
 
-/// Lecteur plein écran façon Apple Music : fond aux couleurs de la pochette, paroles synchronisées, file d'attente.
+/// Lecteur plein écran façon Apple Music (mêmes mesures que music.css de la PWA) : pochette floutée qui tourne en fond,
+/// taches de couleur, pochette qui « respire », paroles synchronisées, file d'attente.
 struct NowPlayingView: View {
     @State private var p = Player.shared
     @State private var lib = Library.shared
@@ -60,169 +59,264 @@ struct NowPlayingView: View {
     @State private var colors: [Color] = []
     @State private var panel: String? = nil // lyrics | queue
     @State private var scrub: Double?
-    @State private var drift = false
+    @State private var drag: CGFloat = 0
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         if let t = p.current {
-            ZStack {
-                background(t)
-                VStack(spacing: 0) {
-                    Capsule().fill(.white.opacity(0.4)).frame(width: 40, height: 5).padding(.top, 8)
-                    if let panel { compactHeader(t).padding(.top, 14); panelView(panel).frame(maxHeight: .infinity) }
-                    else {
-                        Spacer(minLength: 10)
-                        RemoteImage(url: absURL(t.thumb.replacingOccurrences(of: "w120-h120", with: "w800-h800")))
-                            .aspectRatio(1, contentMode: .fit).cardShape(12)
-                            .shadow(color: .black.opacity(0.4), radius: 24, y: 12)
-                            .scaleEffect(p.playing || p.loading ? 1 : 0.82)
-                            .animation(.spring(duration: 0.45, bounce: 0.3), value: p.playing)
-                            .padding(.horizontal, 8)
-                        Spacer(minLength: 10)
-                        titleRow(t)
+            GeometryReader { g in
+                ZStack {
+                    NPBackground(thumb: t.thumbURL, colors: colors, playing: p.playing)
+                    VStack(spacing: 0) {
+                        Capsule().fill(.white.opacity(0.45)).frame(width: 38, height: 5).padding(.vertical, 10).frame(maxWidth: .infinity).contentShape(Rectangle())
+                            .onTapGesture { dismiss() }
+                        if let panel {
+                            panelView(panel, t).frame(maxHeight: .infinity)
+                        } else {
+                            Spacer(minLength: 0)
+                            art(t, width: min(g.size.width - 48, 440, g.size.height * 0.46))
+                            Spacer(minLength: 14)
+                            titleRow(t)
+                        }
+                        if !t.isLive { seekBar(t).padding(.top, 18) } else { HStack(spacing: 6) { LiveDot(); Text("EN DIRECT").font(.system(size: 11, weight: .bold)) }.padding(.top, 18) }
+                        controls(t).padding(.top, 14)
+                        if !live.targetName.isEmpty {
+                            Button { Router.shared.present(.devices) } label: {
+                                Label("Lecture sur \(live.targetName)", systemImage: "hifispeaker.fill").font(.system(size: 13, weight: .bold))
+                                    .padding(.horizontal, 14).padding(.vertical, 7).background(.white.opacity(0.16), in: Capsule())
+                            }
+                            .padding(.top, 6)
+                        }
+                        foot.padding(.top, 14).padding(.bottom, 8)
                     }
-                    if !t.isLive { seekBar(t).padding(.top, 14) } else { HStack { LiveDot(); Text("En direct").font(.footnote.weight(.semibold)) }.padding(.top, 14) }
-                    controls(t).padding(.vertical, 18)
-                    VolumeSlider().frame(height: 34)
-                    bottomBar.padding(.top, 10).padding(.bottom, 4)
+                    .padding(.horizontal, 24)
+                    .foregroundStyle(.white)
+                    .frame(width: g.size.width)
                 }
-                .padding(.horizontal, 26)
-                .foregroundStyle(.white)
+                .offset(y: drag)
+                .simultaneousGesture(DragGesture().onChanged { v in if panel == nil { drag = max(0, v.translation.height) } }.onEnded { v in
+                    if panel == nil && v.translation.height > 110 { dismiss() } else { withAnimation(.spring(duration: 0.35)) { drag = 0 } }
+                })
             }
+            .tint(.white)
             .task(id: t.thumb) {
-                if let u = t.thumbURL, let i = await ImageCache.shared.image(u) { withAnimation(.easeInOut(duration: 0.8)) { colors = ImageCache.shared.palette(i) } }
+                if let u = t.thumbURL, let i = await ImageCache.shared.image(u) { withAnimation(.easeInOut(duration: 1)) { colors = ImageCache.shared.palette(i) } }
             }
-            .gesture(DragGesture().onEnded { v in if panel == nil && v.translation.height > 110 && abs(v.translation.width) < 80 { dismiss() } })
-            .onReceive(NotificationCenter.default.publisher(for: .musicPlayerPanel)) { n in panel = n.object as? String }
         } else {
             Color.black.onAppear { dismiss() }
         }
     }
 
-    @ViewBuilder func background(_ t: Track) -> some View {
-        let c = colors.count >= 3 ? colors : [Color(white: 0.25), Color(white: 0.35), Color(white: 0.15)]
-        ZStack {
-            LinearGradient(colors: [c[1], c[0], c[2]], startPoint: drift ? .topTrailing : .topLeading, endPoint: drift ? .bottomLeading : .bottomTrailing)
-            if Store.get("vis-style", "off") != "off" { VisualView(colors: c, playing: p.playing).opacity(0.9) }
-            Color.black.opacity(0.18)
+    func art(_ t: Track, width: CGFloat) -> some View {
+        let on = p.playing || p.loading
+        return TimelineView(.animation(minimumInterval: 1 / 30, paused: !on)) { tl in
+            let breathe = on ? 1 + 0.0125 * (1 - cos(tl.date.timeIntervalSinceReferenceDate * .pi / 3)) : 1
+            RemoteImage(url: bigArt(t))
+                .frame(width: width, height: width)
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .shadow(color: .black.opacity(on ? 0.6 : 0.5), radius: on ? 30 : 15, y: on ? 30 : 14)
+                .scaleEffect((on ? 1 : 0.82) * breathe)
+                .animation(.spring(duration: 0.6, bounce: 0.35), value: on)
         }
-        .ignoresSafeArea()
-        .onAppear { if Store.get("np-drift", false) { withAnimation(.easeInOut(duration: 12).repeatForever(autoreverses: true)) { drift = true } } }
+        .frame(width: width, height: width)
     }
 
     func titleRow(_ t: Track) -> some View {
-        HStack(alignment: .center, spacing: 10) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(t.title).font(.title3.bold()).lineLimit(1)
-                Button(t.artistLine) { if let id = t.artists.first?.id { dismiss(); Router.shared.open(.artist(id)) } }
-                    .font(.title3).foregroundStyle(.white.opacity(0.7)).lineLimit(1)
+        HStack(spacing: 8) {
+            VStack(alignment: .leading, spacing: 1) {
+                Text(t.title).font(.system(size: 21, weight: .bold)).lineLimit(1)
+                Text(t.artistLine).font(.system(size: 19)).foregroundStyle(.white.opacity(0.65)).lineLimit(1)
+                    .onTapGesture { if let id = t.artists.first?.id { dismiss(); Router.shared.open(.artist(id)) } }
             }
-            Spacer()
+            Spacer(minLength: 4)
             if !t.isLive {
                 let liked = lib.liked.contains(t.id)
-                Button { Task { await lib.toggleLike(t) } } label: { Image(systemName: liked ? "heart.fill" : "heart").font(.title3).frame(width: 36, height: 36).background(.white.opacity(0.15), in: Circle()) }
-                    .accessibilityLabel(liked ? "Je n'aime plus" : "J'aime")
-                Menu { TrackMenuItems(t: t) } label: { Image(systemName: "ellipsis").font(.title3).frame(width: 36, height: 36).background(.white.opacity(0.15), in: Circle()) }
+                RoundIcon(icon: liked ? "heart.fill" : "heart") { Task { await lib.toggleLike(t) } }.accessibilityLabel(liked ? "Je n'aime plus" : "J'aime")
+                Menu { TrackMenuItems(t: t) } label: { RoundIconLabel(icon: "ellipsis") }.accessibilityLabel("Plus")
             }
-        }
-    }
-
-    func compactHeader(_ t: Track) -> some View {
-        HStack(spacing: 12) {
-            RemoteImage(url: t.thumbURL).frame(width: 58, height: 58).cardShape(6)
-            VStack(alignment: .leading, spacing: 2) { Text(t.title).font(.headline).lineLimit(1); Text(t.artistLine).font(.subheadline).foregroundStyle(.white.opacity(0.7)).lineLimit(1) }
-            Spacer()
-            let liked = lib.liked.contains(t.id)
-            Button { Task { await lib.toggleLike(t) } } label: { Image(systemName: liked ? "heart.fill" : "heart").font(.title3) }
-            Menu { TrackMenuItems(t: t) } label: { Image(systemName: "ellipsis.circle").font(.title3) }
         }
     }
 
     func seekBar(_ t: Track) -> some View {
         let d = max(p.duration, 1)
-        let v = scrub ?? p.time
-        return VStack(spacing: 4) {
-            ZStack(alignment: .leading) {
-                Slider(value: Binding(get: { min(v, d) }, set: { scrub = $0 }), in: 0...d) { editing in
-                    if !editing, let s = scrub { p.seek(s); scrub = nil }
+        let v = min(scrub ?? p.time, d)
+        return VStack(spacing: 0) {
+            GeometryReader { g in
+                let active = scrub != nil
+                ZStack(alignment: .leading) {
+                    Capsule().fill(.white.opacity(0.25))
+                    Capsule().fill(.white.opacity(0.85)).frame(width: max(0, g.size.width * v / d))
+                    if let st = p.mixStart, !p.mixing, st < d {
+                        Circle().fill(Color.accent).frame(width: 8, height: 8).offset(x: g.size.width * st / d - 4)
+                    }
                 }
-                .tint(.white)
-                if let st = p.mixStart, !p.mixing, st < d {
-                    GeometryReader { g in Circle().fill(Color.accent).frame(width: 6, height: 6).position(x: g.size.width * st / d, y: g.size.height / 2) }.allowsHitTesting(false)
-                }
+                .frame(height: active ? 10 : 6)
+                .frame(maxHeight: .infinity)
+                .contentShape(Rectangle())
+                .gesture(DragGesture(minimumDistance: 0).onChanged { x in
+                    scrub = max(0, min(d, Double(x.location.x / max(1, g.size.width)) * d))
+                }.onEnded { _ in
+                    if let s = scrub { p.seek(s) }
+                    scrub = nil
+                })
+                .animation(.easeOut(duration: 0.15), value: active)
             }
+            .frame(height: 24)
             HStack {
-                Text(clock(v)); Spacer()
+                Text(clock(v)).frame(width: 60, alignment: .leading)
+                Spacer()
                 badge(t)
-                Spacer(); Text("-" + clock(max(0, d - v)))
+                Spacer()
+                Text("-" + clock(max(0, d - v))).frame(width: 60, alignment: .trailing)
             }
-            .font(.caption.monospacedDigit()).foregroundStyle(.white.opacity(0.7))
+            .font(.system(size: 12).monospacedDigit()).foregroundStyle(.white.opacity(0.6))
         }
     }
 
     @ViewBuilder func badge(_ t: Track) -> some View {
-        if p.mixing { Label("AutoMix", systemImage: "opticaldisc").font(.caption2.weight(.bold)).padding(.horizontal, 8).padding(.vertical, 2).background(.white.opacity(0.2), in: Capsule()) }
-        else if off.has(t.id) { Text("Téléchargé").font(.caption2.weight(.semibold)) }
-        else if t.explicit { Text("Explicite").font(.caption2.weight(.semibold)) }
+        let text = p.mixing ? "AutoMix" : off.has(t.id) ? "Téléchargé" : t.explicit ? "Explicite" : ""
+        if !text.isEmpty {
+            HStack(spacing: 4) {
+                if p.mixing { Image(systemName: "opticaldisc") }
+                Text(text.uppercased())
+            }
+            .font(.system(size: 10, weight: .bold)).tracking(0.4)
+            .padding(.horizontal, 6).padding(.vertical, 2)
+            .background(.white.opacity(0.14), in: RoundedRectangle(cornerRadius: 4))
+        }
     }
 
     func controls(_ t: Track) -> some View {
         HStack {
-            Button { p.toggleShuffle() } label: { Image(systemName: "shuffle").foregroundStyle(p.shuffle ? Color.accent : .white.opacity(0.7)) }.accessibilityLabel("Aléatoire").disabled(t.isLive)
+            SideButton(icon: "shuffle", on: p.shuffle) { p.toggleShuffle() }.accessibilityLabel("Aléatoire").disabled(t.isLive)
             Spacer()
-            Button { p.prev() } label: { Image(systemName: "backward.fill").font(.system(size: 30)) }.accessibilityLabel("Précédent").disabled(t.isLive)
+            Button { p.prev() } label: { Image(systemName: "backward.fill").font(.system(size: 32)).frame(width: 64, height: 64).contentShape(Rectangle()) }.accessibilityLabel("Précédent").disabled(t.isLive)
             Spacer()
-            PlayPauseButton(size: 40)
+            Button { p.toggle() } label: {
+                ZStack {
+                    if p.loading && p.mirror == nil { ProgressView().controlSize(.large).tint(.white) }
+                    else { Image(systemName: p.playing ? "pause.fill" : "play.fill").font(.system(size: 46)).contentTransition(.symbolEffect(.replace)) }
+                }
+                .frame(width: 64, height: 64).contentShape(Rectangle())
+            }
+            .accessibilityLabel(p.playing ? "Pause" : "Lecture")
             Spacer()
-            Button { p.next() } label: { Image(systemName: "forward.fill").font(.system(size: 30)) }.accessibilityLabel("Suivant").disabled(t.isLive)
+            Button { p.next() } label: { Image(systemName: "forward.fill").font(.system(size: 32)).frame(width: 64, height: 64).contentShape(Rectangle()) }.accessibilityLabel("Suivant").disabled(t.isLive)
             Spacer()
-            Button { p.cycleRepeat() } label: { Image(systemName: p.repeatMode == "one" ? "repeat.1" : "repeat").foregroundStyle(p.repeatMode != "off" ? Color.accent : .white.opacity(0.7)) }.accessibilityLabel("Répéter").disabled(t.isLive)
+            SideButton(icon: p.repeatMode == "one" ? "repeat.1" : "repeat", on: p.repeatMode != "off") { p.cycleRepeat() }.accessibilityLabel("Répéter").disabled(t.isLive)
         }
-        .font(.title3)
+        .buttonStyle(.plain)
     }
 
-    var bottomBar: some View {
+    var foot: some View {
         HStack {
-            Button { withAnimation { panel = panel == "lyrics" ? nil : "lyrics" } } label: { Image(systemName: "quote.bubble").foregroundStyle(panel == "lyrics" ? Color.accent : .white.opacity(0.8)) }.accessibilityLabel("Paroles")
             Spacer()
-            AirPlayButton().frame(width: 30, height: 30)
+            FootButton(icon: "quote.bubble", on: panel == "lyrics") { withAnimation(.spring(duration: 0.4)) { panel = panel == "lyrics" ? nil : "lyrics" } }.accessibilityLabel("Paroles")
             Spacer()
-            Button { Router.shared.present(.devices) } label: { Image(systemName: "hifispeaker.2").foregroundStyle(!live.targetName.isEmpty || live.devices.count > 1 ? Color.accent : .white.opacity(0.8)) }.accessibilityLabel("Appareil de sortie")
+            FootButton(icon: "slider.vertical.3", on: false) { Router.shared.present(.eq) }.accessibilityLabel("Égaliseur")
             Spacer()
-            Button { Router.shared.present(.eq) } label: { Image(systemName: "slider.vertical.3").foregroundStyle(.white.opacity(0.8)) }.accessibilityLabel("Égaliseur")
+            FootButton(icon: "hifispeaker", on: !live.targetName.isEmpty) { Router.shared.present(.devices) }.accessibilityLabel("Appareil de sortie")
             Spacer()
-            Button { withAnimation { panel = panel == "queue" ? nil : "queue" } } label: { Image(systemName: "list.bullet").foregroundStyle(panel == "queue" ? Color.accent : .white.opacity(0.8)) }.accessibilityLabel("À suivre")
+            FootButton(icon: "list.bullet", on: panel == "queue") { withAnimation(.spring(duration: 0.4)) { panel = panel == "queue" ? nil : "queue" } }.accessibilityLabel("À suivre")
+            Spacer()
         }
-        .font(.title3)
-        .padding(.horizontal, 20)
     }
 
-    @ViewBuilder func panelView(_ panel: String) -> some View {
-        if panel == "lyrics" { LyricsPanel() } else { QueuePanel() }
+    func panelView(_ panel: String, _ t: Track) -> some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 12) {
+                RemoteImage(url: t.thumbURL).frame(width: 56, height: 56).clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(t.title).font(.system(size: 17, weight: .bold)).lineLimit(1)
+                    Text(t.artistLine).font(.system(size: 15)).foregroundStyle(.white.opacity(0.65)).lineLimit(1)
+                }
+                Spacer(minLength: 4)
+                if !t.isLive {
+                    let liked = lib.liked.contains(t.id)
+                    RoundIcon(icon: liked ? "heart.fill" : "heart") { Task { await lib.toggleLike(t) } }
+                    Menu { TrackMenuItems(t: t) } label: { RoundIconLabel(icon: "ellipsis") }
+                }
+            }
+            .padding(.bottom, 6)
+            if panel == "lyrics" { LyricsPanel() } else { QueuePanel() }
+        }
+        .transition(.opacity)
     }
 }
 
-extension Notification.Name { static let musicPlayerPanel = Notification.Name("music.panel") }
-
-struct AirPlayButton: UIViewRepresentable {
-    func makeUIView(context: Context) -> AVRoutePickerView {
-        let v = AVRoutePickerView()
-        v.tintColor = .white.withAlphaComponent(0.8)
-        v.activeTintColor = UIColor(Color.accent)
-        v.prioritizesVideoDevices = false
-        return v
-    }
-    func updateUIView(_ uiView: AVRoutePickerView, context: Context) {}
+func bigArt(_ t: Track) -> URL? {
+    absURL(t.thumb.replacingOccurrences(of: "w120-h120", with: "w800-h800").replacingOccurrences(of: "w544-h544", with: "w800-h800"))
 }
 
-struct VolumeSlider: UIViewRepresentable {
-    func makeUIView(context: Context) -> MPVolumeView {
-        let v = MPVolumeView(frame: .zero)
-        v.showsVolumeSlider = true
-        v.tintColor = .white
-        return v
+/// Fond du lecteur : couleur de la pochette, deux taches floutées, deux copies floutées de la pochette qui tournent.
+struct NPBackground: View {
+    var thumb: URL?
+    var colors: [Color]
+    var playing: Bool
+    @State private var drift = false
+    var body: some View {
+        let c = colors.count >= 3 ? colors : [Color(white: 0.2), Color(white: 0.33), Color(white: 0.13)]
+        GeometryReader { g in
+            let s = max(g.size.width, g.size.height)
+            ZStack {
+                c[0]
+                TimelineView(.animation(minimumInterval: 1 / 20, paused: !playing)) { tl in
+                    let a = tl.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 60) / 60 * 360
+                    ZStack {
+                        RemoteImage(url: thumb).frame(width: s, height: s).scaleEffect(1.4).rotationEffect(.degrees(a))
+                        RemoteImage(url: thumb).frame(width: s, height: s).scaleEffect(1.4).rotationEffect(.degrees(-a)).opacity(0.5)
+                    }
+                    .saturation(1.6).blur(radius: 60).opacity(0.75)
+                }
+                .frame(width: g.size.width, height: g.size.height)
+                .id(thumb)
+                .transition(.opacity.animation(.easeInOut(duration: 1.2)))
+                Circle().fill(c[1]).frame(width: s * 0.7).blur(radius: 80).opacity(0.9).blendMode(.softLight)
+                    .offset(x: -g.size.width * 0.3 + (drift ? s * 0.1 : 0), y: -g.size.height * 0.3 + (drift ? s * 0.07 : 0))
+                Circle().fill(c[2]).frame(width: s * 0.7).blur(radius: 80).opacity(0.9).blendMode(.softLight)
+                    .offset(x: g.size.width * 0.3 - (drift ? s * 0.1 : 0), y: g.size.height * 0.3 - (drift ? s * 0.07 : 0))
+                if Store.get("vis-style", "off") != "off" { VisualView(colors: c, playing: playing).opacity(0.85) }
+                Color.black.opacity(0.28)
+            }
+            .frame(width: g.size.width, height: g.size.height)
+            .clipped()
+        }
+        .ignoresSafeArea()
+        .allowsHitTesting(false)
+        .onAppear { if Store.get("np-drift", false) { withAnimation(.easeInOut(duration: 22).repeatForever(autoreverses: true)) { drift = true } } }
     }
-    func updateUIView(_ uiView: MPVolumeView, context: Context) {}
+}
+
+struct RoundIconLabel: View {
+    var icon: String
+    var body: some View { Image(systemName: icon).font(.system(size: 15, weight: .semibold)).frame(width: 32, height: 32).background(.white.opacity(0.14), in: Circle()) }
+}
+struct RoundIcon: View {
+    var icon: String
+    var action: () -> Void
+    var body: some View { Button(action: action) { RoundIconLabel(icon: icon) }.buttonStyle(.plain) }
+}
+struct SideButton: View {
+    var icon: String, on: Bool
+    var action: () -> Void
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: icon).font(.system(size: 19, weight: .semibold)).frame(width: 40, height: 40)
+                .foregroundStyle(on ? .white : .white.opacity(0.6)).background(on ? Color.white.opacity(0.18) : .clear, in: Circle())
+        }
+        .buttonStyle(.plain)
+    }
+}
+struct FootButton: View {
+    var icon: String, on: Bool
+    var action: () -> Void
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: icon).font(.system(size: 19, weight: .medium)).frame(width: 44, height: 44)
+                .foregroundStyle(on ? .white : .white.opacity(0.65)).background(on ? Color.white.opacity(0.18) : .clear, in: Circle())
+        }
+        .buttonStyle(.plain)
+    }
 }
 
 // MARK: paroles
@@ -244,22 +338,26 @@ struct LyricsPanel: View {
                     if !lines.isEmpty {
                         ForEach(Array(lines.enumerated()), id: \.offset) { i, l in
                             Text(l.text.isEmpty ? "…" : l.text)
-                                .font(.system(size: 28, weight: .bold))
-                                .foregroundStyle(i == cur ? .white : .white.opacity(i < cur ? 0.45 : 0.3))
-                                .blur(radius: i == cur || abs(i - cur) > 6 ? 0 : 0.6)
+                                .font(.system(size: 27, weight: .heavy)).tracking(-0.3)
+                                .foregroundStyle(i == cur ? .white : .white.opacity(i < cur ? 0.45 : 0.32))
+                                .blur(radius: i <= cur ? 0 : 0.6)
+                                .scaleEffect(i == cur ? 1.03 : 1, anchor: .leading)
+                                .animation(.easeOut(duration: 0.4), value: cur)
                                 .id(i)
                                 .onTapGesture { p.seek(l.t / 1000 + 0.05) }
                         }
                     } else if let text {
-                        Text(text).font(.title3.weight(.semibold))
+                        Text(text).font(.system(size: 21, weight: .heavy)).foregroundStyle(.white.opacity(0.85))
                     } else if failed {
                         Label("Pas de paroles pour ce titre.", systemImage: "music.mic").foregroundStyle(.white.opacity(0.7)).padding(.top, 40)
                     } else { ProgressView().tint(.white).frame(maxWidth: .infinity).padding(.top, 40) }
                     if let srcName { Text(srcName).font(.caption).foregroundStyle(.white.opacity(0.5)) }
                 }
-                .padding(.vertical, 24)
+                .padding(.top, 60).padding(.bottom, 200).padding(.horizontal, 4)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
+            .scrollIndicators(.hidden)
+            .mask(LinearGradient(stops: [.init(color: .clear, location: 0), .init(color: .black, location: 0.04), .init(color: .black, location: 0.9), .init(color: .clear, location: 1)], startPoint: .top, endPoint: .bottom))
             .simultaneousGesture(DragGesture().onChanged { _ in userScroll = Date() })
             .onChange(of: cur) {
                 guard cur >= 0, Date().timeIntervalSince(userScroll) > 3 else { return }
@@ -289,10 +387,13 @@ struct QueuePanel: View {
         let next = upcoming.filter { p.queue[$0].auto != true }, auto = upcoming.filter { p.queue[$0].auto == true }
         VStack(spacing: 0) {
             HStack {
-                Text("À suivre").font(.headline)
+                Text("À suivre").font(.system(size: 17, weight: .bold))
                 Spacer()
-                Button { p.setAutoplay(!p.autoplay) } label: { Label("Auto", systemImage: "infinity").font(.subheadline.weight(.semibold)).padding(.horizontal, 10).padding(.vertical, 4).background(p.autoplay ? Color.white.opacity(0.3) : .clear, in: Capsule()) }
-                Button("Effacer") { p.clearUpcoming() }.font(.subheadline)
+                Button { p.setAutoplay(!p.autoplay) } label: {
+                    Label("Auto", systemImage: "infinity").font(.system(size: 13.5, weight: .semibold)).padding(.horizontal, 12).padding(.vertical, 6)
+                        .background(p.autoplay ? Color.white : .white.opacity(0.12), in: Capsule()).foregroundStyle(p.autoplay ? .black : .white.opacity(0.8))
+                }
+                Button { p.clearUpcoming() } label: { Text("Effacer").font(.system(size: 13.5, weight: .semibold)).padding(.horizontal, 12).padding(.vertical, 6).background(.white.opacity(0.12), in: Capsule()).foregroundStyle(.white.opacity(0.8)) }
             }
             .padding(.vertical, 10)
             List {
@@ -315,6 +416,8 @@ struct QueuePanel: View {
             }
             .listStyle(.plain)
             .scrollContentBackground(.hidden)
+            .scrollIndicators(.hidden)
+            .mask(LinearGradient(stops: [.init(color: .clear, location: 0), .init(color: .black, location: 0.04), .init(color: .black, location: 0.9), .init(color: .clear, location: 1)], startPoint: .top, endPoint: .bottom))
             .environment(\.editMode, .constant(.active))
         }
     }
@@ -350,3 +453,5 @@ struct QueueRow: View {
         .contentShape(Rectangle())
     }
 }
+
+extension Notification.Name { static let musicPlayerPanel = Notification.Name("music.panel") }

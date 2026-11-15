@@ -3,3 +3,4 @@ build/
 Payload/
 *.ipa
 ref
+Sources/Assets.xcassets/AppIcon.appiconset/icon.png

@@ -32,19 +32,16 @@ struct Main: View {
             if router.carMode { CarModeView() } else { tabs }
         }
         .overlay(alignment: .top) { ToastView(item: toast.current) }
-        .sheet(item: $router.sheet) { s in
-            switch s {
-            case .addTo(let t): AddToSheet(tracks: t)
-            case .versions(let t): VersionsSheet(t: t)
-            case .editMpl(let p): EditMplSheet(p: p)
-            case .devices: DevicePicker()
-            case .eq: EQSheet()
-            case .newPlaylist(let t): Color.clear.onAppear { router.sheet = nil; newPlaylist(t) }
-            }
-        }
+        // une seule fenêtre à la fois : par-dessus le lecteur quand il est ouvert (sinon iOS ferme le lecteur pour l'afficher)
+        .sheet(item: Binding(get: { router.nowPlaying || router.listening ? nil : router.sheet }, set: { router.sheet = $0 })) { s in sheet(s) }
         .fullScreenCover(isPresented: $router.nowPlaying) {
             NowPlayingView()
-                .sheet(item: $router.sheet) { s in sheet(s) }
+                .sheet(item: Binding(get: { router.nowPlaying ? router.sheet : nil }, set: { router.sheet = $0 })) { s in sheet(s) }
+                .alert(router.confirm?.title ?? "", isPresented: Binding(get: { router.confirm != nil }, set: { if !$0 { router.confirm = nil } }), presenting: router.confirm) { c in
+                    Button(c.ok, role: c.danger ? .destructive : nil) { c.run() }
+                    Button("Annuler", role: .cancel) {}
+                } message: { c in Text(c.message) }
+                .overlay(alignment: .top) { ToastView(item: toast.current) }
         }
         .fullScreenCover(isPresented: $router.listening) { ListenView() }
         .alert(router.confirm?.title ?? "", isPresented: Binding(get: { router.confirm != nil }, set: { if !$0 { router.confirm = nil } }), presenting: router.confirm) { c in
