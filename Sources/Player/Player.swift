@@ -215,6 +215,7 @@ import UIKit
         streamer?.pause()
         if fading { finishFadeNow() }
         A.pause()
+        audio.pause()
         playing = false
         loading = false
         save(now: true)
@@ -411,7 +412,7 @@ import UIKit
                 A.rate = 1
                 audio.start()
                 A.schedule(from: start, to: smart ? tr?["end"].double : nil)
-                if !wanted { A.pause() } else { try? AVAudioSession.sharedInstance().setActive(true) }
+                if !wanted { A.pause(); audio.pause() } else { try? AVAudioSession.sharedInstance().setActive(true) }
                 stopStreamer()
                 time = start
                 loading = false
@@ -460,7 +461,7 @@ import UIKit
         guard current != nil, !(current?.isLive ?? false), A.file != nil else { return }
         let at = time
         A.schedule(from: at, to: trimNow(current)?["end"].double)
-        if !playing { A.pause() }
+        if !playing { A.pause(); audio.pause() }
     }
 
     private func upcoming(_ n: Int) -> [Track] { Array(queue.dropFirst(idx + 1).prefix(n)) }

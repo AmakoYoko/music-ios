@@ -139,6 +139,8 @@ final class AudioEngine {
         engine.prepare()
         try? engine.start()
     }
+    /// Moteur arrêté en pause : sinon il rend du silence et iOS affiche « en lecture ».
+    func pause() { if engine.isRunning { engine.pause() } }
 
     func setEQ(on: Bool, gains: [Double]) {
         for (i, b) in master.bands.enumerated() { b.gain = on ? Float(gains[safe: i] ?? 0) : 0 }
