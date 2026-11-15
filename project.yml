@@ -14,6 +14,7 @@ targets:
         MARKETING_VERSION: "1.0"
         CURRENT_PROJECT_VERSION: "1"
         SWIFT_VERSION: "5.0"
+        SWIFT_STRICT_CONCURRENCY: minimal
         TARGETED_DEVICE_FAMILY: "1"
         GENERATE_INFOPLIST_FILE: YES
         CODE_SIGNING_ALLOWED: NO
@@ -21,6 +22,8 @@ targets:
       path: Sources/Info.plist
       properties:
         CFBundleDisplayName: Music
+        NSMicrophoneUsageDescription: Music écoute quelques secondes pour reconnaître le titre qui passe.
+        ITSAppUsesNonExemptEncryption: false
         UIBackgroundModes: [audio]
         UILaunchScreen: {}
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]

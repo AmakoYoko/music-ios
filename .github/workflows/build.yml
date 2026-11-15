@@ -15,7 +15,7 @@ jobs:
         run: |
           xcodebuild -project LamasMusic.xcodeproj -scheme LamasMusic -configuration Release \
             -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build \
-            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build | xcpretty || exit ${PIPESTATUS[0]}
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CURRENT_PROJECT_VERSION=${{ github.run_number }} build 2>&1 | tee build.log | xcpretty || { grep -E 'error:' build.log | sort -u | head -80; exit 1; }
           mkdir Payload && cp -R build/Build/Products/Release-iphoneos/LamasMusic.app Payload/
           zip -qry LamasMusic.ipa Payload
       - uses: actions/upload-artifact@v4
