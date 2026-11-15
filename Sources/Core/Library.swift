@@ -60,7 +60,7 @@ let PALETTES: [(String, String)] = [("#fa2d48", "#ff8a5c"), ("#5e5ce6", "#bf5af2
         Task { await refreshMine() }
     }
     @discardableResult func refreshMine() async -> [MPL] {
-        if let d = try? await call(""), let l = d.decode([MPL].self) { mine = l; Store.set("mpl.list", l) }
+        if let d = try? await call(""), let l = d.decode([MPL].self) { mine = l; Store.set("mpl.list", l); Spotlight.schedule() }
         return mine
     }
     func mpl(_ id: String) async throws -> MPL {

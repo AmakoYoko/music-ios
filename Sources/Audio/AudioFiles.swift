@@ -39,7 +39,8 @@ final class AudioFiles: @unchecked Sendable {
 
     func prepare(_ ids: [String]) { for id in ids where cached(id) == nil { Task { _ = try? await file(id) } } }
 
-    private func fetch(_ id: String, retry: Bool = false) async throws -> URL {
+    private func fetch(_ id: String, attempt: Int = 0) async throws -> URL {
+        let retry = attempt > 0
         let url = baseURL.appendingPathComponent("api/audio/\(id)")
         var req = URLRequest(url: URL(string: url.absoluteString + (retry ? "?r=\(Int(Date().timeIntervalSince1970))" : ""))!)
         req.timeoutInterval = 90
@@ -53,8 +54,10 @@ final class AudioFiles: @unchecked Sendable {
             try await Self.makeReadable(dest)
             trim()
             return dest
-        } catch where !retry && (error as? APIError)?.code != 401 {
-            return try await fetch(id, retry: true)
+        } catch where attempt < 2 && (error as? APIError)?.code != 401 && (error as? URLError)?.code != .notConnectedToInternet {
+            // réseau qui hoquette (tunnel, ascenseur) : on réessaie un peu plus tard
+            try await Task.sleep(nanoseconds: UInt64(attempt + 1) * 1_500_000_000)
+            return try await fetch(id, attempt: attempt + 1)
         }
     }
 

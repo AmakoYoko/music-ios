@@ -58,6 +58,14 @@ import UIKit
     private var lastPrefetch = ""
     private var radioBusy = false
     private var errorRetry = Set<String>()
+    /// Titre bloqué faute de réseau : relancé dès le retour en ligne.
+    private var waitNet = false
+    private var inflight: Int?
+    private var streamFail: Any?
+    private var liveFail: Any?
+    /// Minuteur de sommeil.
+    private(set) var sleepAt: Date?
+    private var sleepTimer: Timer?
     private var lastSave = Date.distantPast
 
     private init() {
@@ -72,8 +80,11 @@ import UIKit
         NotificationCenter.default.addObserver(forName: AVAudioSession.interruptionNotification, object: nil, queue: .main) { [weak self] n in
             let type = (n.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt).flatMap(AVAudioSession.InterruptionType.init)
             let opts = AVAudioSession.InterruptionOptions(rawValue: (n.userInfo?[AVAudioSessionInterruptionOptionKey] as? UInt) ?? 0)
+            // iOS signale après coup une coupure survenue pendant que l'appli dormait : rien à faire
+            let suspended = (n.userInfo?[AVAudioSessionInterruptionReasonKey] as? UInt) == AVAudioSession.InterruptionReason.appWasSuspended.rawValue
             MainActor.assumeIsolated {
                 guard let self else { return }
+                if type == .began, suspended { return }
                 if type == .began { self.pauseLocal(keepWanted: true) }
                 else if type == .ended, opts.contains(.shouldResume), self.wanted { self.resumeLocal() }
             }
@@ -81,6 +92,10 @@ import UIKit
         NotificationCenter.default.addObserver(forName: AVAudioSession.routeChangeNotification, object: nil, queue: .main) { [weak self] n in
             let reason = (n.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt).flatMap(AVAudioSession.RouteChangeReason.init)
             MainActor.assumeIsolated { if reason == .oldDeviceUnavailable { self?.pause() } } // casque débranché
+        }
+        NotificationCenter.default.addObserver(forName: .musicStale, object: nil, queue: .main) { [weak self] n in
+            guard n.object as? String == "online" else { return }
+            MainActor.assumeIsolated { self?.networkBack() }
         }
         Task { if let v = try? await yt("/versions/prefs", fresh: true) { versions = v.object.compactMapValues { $0.decode(Track.self) } } }
         NowPlaying.setup(self)
@@ -374,6 +389,10 @@ import UIKit
             let p = AVPlayer(playerItem: AVPlayerItem(asset: asset))
             p.automaticallyWaitsToMinimizeStalling = true
             liveItem = p
+            if let o = liveFail { NotificationCenter.default.removeObserver(o) }
+            liveFail = NotificationCenter.default.addObserver(forName: .AVPlayerItemFailedToPlayToEndTime, object: p.currentItem, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.streamBroke(live: p) }
+            }
             loading = ap
             if ap { try? AVAudioSession.sharedInstance().setActive(true); p.play(); playing = true }
             changed()
@@ -386,7 +405,10 @@ import UIKit
         playing = ap
         changed()
         NowPlaying.update(self)
+        waitNet = false
+        inflight = seq
         Task {
+            defer { if inflight == seq { inflight = nil } }
             let tr = smart ? await loadTrim(t) : nil
             var start = at
             if start == 0, smart, let s = tr?["start"].double { start = s }
@@ -399,7 +421,7 @@ import UIKit
                         let pos = st.currentTime().seconds
                         if pos.isFinite && pos > 0.2 { start = pos + 0.05 }
                         if st.rate == 0 && st.timeControlStatus == .paused && !loading { wanted = false }
-                    }
+                    } else if seq == loadSeq, time > start + 0.2 { start = time } // le flux s'est coupé : reprise où il en était
                     guard seq == loadSeq else { return }
                     try A.load(f, id: t.id, engine: audio.engine)
                 } else {
@@ -427,6 +449,16 @@ import UIKit
                 if streamer != nil { return } // le flux continue : le titre reste écoutable sans son fichier
                 loading = false
                 if (error as? APIError)?.code == 401 { playing = false; changed(); return }
+                if error is URLError || !Offline.shared.online {
+                    // pas de réseau : un titre téléchargé plus loin dans la file, sinon on attend le retour en ligne
+                    if let j = queue.indices.first(where: { $0 > idx && AudioFiles.shared.cached(queue[$0].id) != nil }) {
+                        Toast.show("Hors ligne : lecture du prochain titre téléchargé", .warn)
+                        idx = j; load(autoplay: wanted, at: 0); return
+                    }
+                    waitNet = true; playing = false; changed(); NowPlaying.update(self)
+                    Toast.show("En attente du réseau : la lecture reprendra seule", .warn)
+                    return
+                }
                 Toast.show("Lecture impossible : \(t.title)", .err)
                 try? await Task.sleep(nanoseconds: 600_000_000)
                 if seq == loadSeq { next(auto: true) }
@@ -447,6 +479,9 @@ import UIKit
         streamEnd = NotificationCenter.default.addObserver(forName: .AVPlayerItemDidPlayToEndTime, object: item, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { if self?.streamer === s { self?.next(auto: true) } }
         }
+        streamFail = NotificationCenter.default.addObserver(forName: .AVPlayerItemFailedToPlayToEndTime, object: item, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.streamBroke(stream: s) }
+        }
         try? AVAudioSession.sharedInstance().setActive(true)
         s.play()
     }
@@ -454,6 +489,56 @@ import UIKit
         streamer?.pause()
         streamer = nil
         if let o = streamEnd { NotificationCenter.default.removeObserver(o); streamEnd = nil }
+        if let o = streamFail { NotificationCenter.default.removeObserver(o); streamFail = nil }
+    }
+
+    /// Flux coupé (réseau perdu) : le fichier en cours de récupération prend le relais, sinon nouvel essai.
+    private func streamBroke(stream s: AVPlayer? = nil, live l: AVPlayer? = nil) {
+        if let s, streamer === s {
+            let pos = s.currentTime().seconds
+            if pos.isFinite && pos > 0 { time = pos }
+            stopStreamer()
+            if inflight != loadSeq { load(autoplay: wanted, at: time) }
+        } else if let l, liveItem === l, wanted {
+            if Offline.shared.online {
+                Task { try? await Task.sleep(nanoseconds: 3_000_000_000); if liveItem === l, wanted { load(autoplay: true) } }
+            } else { waitNet = true; playing = false; changed() }
+        }
+    }
+
+    /// Retour du réseau : reprise du titre ou de la radio restés en attente.
+    private func networkBack() {
+        guard mirror == nil, current != nil else { return }
+        if waitNet { waitNet = false; load(autoplay: wanted, at: time); return }
+        if let l = liveItem, wanted, l.timeControlStatus != .playing { load(autoplay: true) }
+    }
+
+    // MARK: minuteur de sommeil
+    func sleep(in minutes: Double?) {
+        sleepTimer?.invalidate(); sleepTimer = nil; sleepAt = nil
+        guard let m = minutes, m > 0 else { emit("state"); return }
+        sleepAt = Date().addingTimeInterval(m * 60)
+        sleepTimer = Timer.common(withTimeInterval: m * 60, repeats: false) { _ in
+            MainActor.assumeIsolated { Player.shared.fadeToSleep() }
+        }
+        emit("state")
+    }
+    /// Baisse progressive sur 8 s, pause, puis volume d'origine.
+    private func fadeToSleep() {
+        sleepTimer = nil; sleepAt = nil
+        let t0 = Date(), v = Float(volume)
+        Timer.common(withTimeInterval: 0.2, repeats: true) { tm in
+            MainActor.assumeIsolated {
+                let p = Player.shared
+                let f = Float(max(0, 1 - Date().timeIntervalSince(t0) / 8))
+                p.audio.bus.outputVolume = v * f; p.streamer?.volume = v * f; p.liveItem?.volume = f
+                guard f == 0 else { return }
+                tm.invalidate()
+                p.pause()
+                p.audio.bus.outputVolume = v; p.streamer?.volume = v; p.liveItem?.volume = 1
+                p.emit("state")
+            }
+        }
     }
 
     /// Le moteur a été reconfiguré (sortie audio changée) : reprise au même endroit.
@@ -540,6 +625,7 @@ import UIKit
         }
         if !reported.contains(t.id) && time > min(30, (duration > 0 ? duration : 60) / 2) {
             reported.insert(t.id)
+            Offline.shared.listened(t)
             let plain = t.plain
             Task { _ = try? await yt("/history", body: ["videoId": .str(t.id), "track": JSON.encode(plain)]) }
             var recent = Store.get("recent", [Track]()).filter { $0.id != t.id }

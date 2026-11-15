@@ -72,6 +72,9 @@ struct SettingsPage: View {
     @State private var busy = false
     @State private var autoLiked = Store.get("auto-liked", false)
     @State private var autoWifi = Store.get("auto-wifi", true)
+    @State private var autoRecent = Store.get("auto-recent", false)
+    @State private var quota = Store.get("offline-quota", 0.0)
+    @State private var liveAct = Store.get("live-activity", true)
     @State private var autoCar = Store.get("auto-car", false)
     @State private var vis = Store.get("vis-style", "off")
     @State private var react = Store.get("vis-react", false)
@@ -92,12 +95,20 @@ struct SettingsPage: View {
                 Picker(selection: $vis) { ForEach(Visual.styles, id: \.0) { Text($0.1).tag($0.0) } } label: { SettingLabel("Lecteur animé", "Animation aux couleurs de la pochette derrière le lecteur plein écran. Consommation énergétique élevée sur batterie.", "sparkles") }
                     .onChange(of: vis) { Store.set("vis-style", vis) }
                 if vis != "off" { Toggle(isOn: $react) { SettingLabel("Réagir à la musique", "L'animation suit les basses et les attaques du morceau.", "waveform") }.onChange(of: react) { Store.set("vis-react", react) } }
+                Toggle(isOn: $liveAct) { SettingLabel("Activité en direct", "Le titre en cours sur l'écran verrouillé et dans la Dynamic Island", "iphone") }
+                    .onChange(of: liveAct) { Store.set("live-activity", liveAct); if liveAct { NowPlaying.update(player) } else { NowActivity.end() } }
                 Toggle(isOn: $drift) { SettingLabel("Fond en mouvement", "Les couleurs du lecteur plein écran dérivent lentement. Consomme de la batterie.", "water.waves") }.onChange(of: drift) { Store.set("np-drift", drift) }
                 Button { Router.shared.present(.eq) } label: { SettingLabel("Égaliseur", EQ.shared.on ? "Activé" : "Désactivé", "slider.vertical.3") }
                 SettingLabel("Téléchargements à jour", "Les playlists téléchargées récupèrent seules leurs nouveaux titres · toujours", "arrow.clockwise")
                 Toggle(isOn: $autoLiked) { SettingLabel("Titres J'aime hors ligne", "Chaque titre aimé est téléchargé automatiquement", "heart") }
                     .onChange(of: autoLiked) { Store.set("auto-liked", autoLiked); if autoLiked { Task { await off.autoSync(force: true) } } }
                 Toggle(isOn: $autoWifi) { SettingLabel("Seulement en Wi-Fi", "Pas de téléchargement automatique sur réseau mobile", "wifi") }.onChange(of: autoWifi) { Store.set("auto-wifi", autoWifi) }
+                Toggle(isOn: $autoRecent) { SettingLabel("Garder mes écoutes", "Les titres écoutés restent sur l'appareil, sans les télécharger à nouveau", "clock.arrow.circlepath") }.onChange(of: autoRecent) { Store.set("auto-recent", autoRecent) }
+                Picker(selection: $quota) {
+                    Text("Illimité").tag(0.0)
+                    ForEach([2.0, 5, 10, 20, 50], id: \.self) { Text("\(Int($0)) Go").tag($0) }
+                } label: { SettingLabel("Espace maximal", "Au-delà, les écoutes gardées les plus anciennes partent (jamais un album ou une playlist téléchargés)", "internaldrive") }
+                .onChange(of: quota) { Store.set("offline-quota", quota); off.enforceQuota() }
             }
             Section("Appareils") {
                 HStack { SettingLabel("Nom de cet appareil", "Affiché dans « Appareil de sortie » sur tes autres appareils", "iphone"); TextField("Nom", text: $devName).multilineTextAlignment(.trailing).onSubmit { if !devName.isEmpty { live.rename(devName) } } }

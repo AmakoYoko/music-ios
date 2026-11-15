@@ -1,3 +1,4 @@
+import CoreSpotlight
 import AuthenticationServices
 import SwiftUI
 
@@ -14,6 +15,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         BackgroundDL.shared.completion = completionHandler
         _ = BackgroundDL.shared.session
     }
+    func applicationWillTerminate(_ application: UIApplication) { NowActivity.endNow() }
 }
 
 struct Root: View {
@@ -107,6 +109,7 @@ struct Main: View {
         .modifier(MiniPlayerHost(show: player.current != nil))
         .environment(\.npZoom, npZoom)
         .onOpenURL { Links.open($0) }
+        .onContinueUserActivity(CSSearchableItemActionType) { Spotlight.open($0) }
     }
 
     func stack<V: View>(_ t: Tab, @ViewBuilder _ root: () -> V) -> some View {

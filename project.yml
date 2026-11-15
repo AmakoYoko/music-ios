@@ -29,6 +29,7 @@ targets:
         NSMicrophoneUsageDescription: Music écoute quelques secondes pour reconnaître le titre qui passe.
         ITSAppUsesNonExemptEncryption: false
         UIBackgroundModes: [audio]
+        NSSupportsLiveActivities: true
         UILaunchScreen: {}
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
         CFBundleURLTypes:

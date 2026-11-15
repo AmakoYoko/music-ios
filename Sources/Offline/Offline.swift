@@ -20,6 +20,11 @@ import Observation
     private let monitor = NWPathMonitor()
     private(set) var cellular = false
     private(set) var online = true
+    /// Titres gardés automatiquement après écoute : les seuls retirés pour faire de la place.
+    private(set) var kept = Set<String>()
+    private var played: [String: Double] = [:]
+    private var retry: [String: Track] = [:]
+    private struct Smart: Codable { var kept: [String]; var played: [String: Double] }
 
     nonisolated static let dir: URL = {
         let d = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("offline")
@@ -30,18 +35,25 @@ import Observation
     }()
     private var index: URL { Self.dir.appendingPathComponent("index.json") }
     private var colIndex: URL { Self.dir.appendingPathComponent("collections.json") }
+    private var smartIndex: URL { Self.dir.appendingPathComponent("smart.json") }
 
     private init() {
         if let d = try? Data(contentsOf: index), let t = try? JSONDecoder().decode([Track].self, from: d) { tracks = t }
         if let d = try? Data(contentsOf: colIndex), let c = try? JSONDecoder().decode([Collection].self, from: d) { collections = c }
         ids = Set(tracks.map(\.id))
+        if let d = try? Data(contentsOf: smartIndex), let s = try? JSONDecoder().decode(Smart.self, from: d) { kept = Set(s.kept).intersection(ids); played = s.played }
         monitor.pathUpdateHandler = { [weak self] p in
             Task { @MainActor in
                 guard let self else { return }
                 let was = self.online
                 self.online = p.status == .satisfied
                 self.cellular = p.usesInterfaceType(.cellular)
-                if self.online && !was { Toast.show("De nouveau en ligne", .ok); NotificationCenter.default.post(name: .musicStale, object: "online") }
+                if self.online && !was {
+                    Toast.show("De nouveau en ligne", .ok); NotificationCenter.default.post(name: .musicStale, object: "online")
+                    // téléchargements interrompus par la coupure : relancés
+                    let again = Array(self.retry.values); self.retry = [:]
+                    if !again.isEmpty { self.download(again) }
+                }
                 if !self.online && was { Toast.show("Hors ligne : les titres téléchargés restent disponibles", .warn) }
             }
         }
@@ -77,16 +89,19 @@ import Observation
             tracks.removeAll { $0.id == id }
             tracks.insert(x, at: 0)
             ids.insert(id)
+            kept.remove(id)
             save()
+            enforceQuota()
         } catch {
             try? FileManager.default.removeItem(at: part)
             Toast.show("Téléchargement impossible : \(t.title)", .err)
         }
     }
-    func failed(_ id: String, _ message: String?) {
+    func failed(_ id: String, _ message: String?, network: Bool = false) {
         let t = jobs[id]?.track
         jobs[id] = nil
         saveJobs()
+        if network, !online, let t { retry[id] = t; return } // repris au retour du réseau
         if online, let t { Toast.show("Téléchargement impossible : \(t.title)", .err) }
     }
     func progress(_ id: String, _ p: Double) { jobs[id]?.progress = p }
@@ -106,19 +121,51 @@ import Observation
         try? FileManager.default.removeItem(at: file(id))
         tracks.removeAll { $0.id == id }
         ids.remove(id)
+        kept.remove(id)
         save()
     }
+
+    // MARK: hors ligne intelligent : écoutes gardées, espace maximal
+    /// Titre écouté : sa copie de lecture rejoint les téléchargements (option « Garder mes écoutes »), sans retéléchargement.
+    func listened(_ t: Track) {
+        played[t.id] = Date().timeIntervalSince1970
+        defer { saveSmart() }
+        guard Store.get("auto-recent", false), !has(t.id), t.available, !t.isLive, jobs[t.id] == nil else { return }
+        let src = AudioFiles.shared.dir.appendingPathComponent("\(t.id).m4a")
+        guard FileManager.default.fileExists(atPath: src.path), (try? FileManager.default.copyItem(at: src, to: file(t.id))) != nil else { return }
+        var x = t.plain; x.auto = nil
+        tracks.insert(x, at: 0)
+        ids.insert(t.id); kept.insert(t.id)
+        save()
+        enforceQuota()
+    }
+    /// Au-delà de l'espace choisi (ou si l'appareil est presque plein), les titres gardés automatiquement
+    /// les moins récemment écoutés partent ; jamais ceux d'un album ou d'une playlist téléchargés.
+    func enforceQuota() {
+        let quota = Int64(Store.get("offline-quota", 0.0) * 1_000_000_000)
+        var total = totalSize
+        let keep = Set(collections.flatMap(\.ids))
+        let victims = tracks.filter { kept.contains($0.id) && !keep.contains($0.id) }.sorted { (played[$0.id] ?? 0) < (played[$1.id] ?? 0) }
+        for t in victims {
+            guard (quota > 0 && total > quota) || freeSpace < 1_000_000_000 else { break }
+            total -= size(t.id)
+            remove(t.id)
+        }
+    }
+    private func saveSmart() { try? JSONEncoder().encode(Smart(kept: Array(kept), played: played)).write(to: smartIndex, options: .atomic) }
     func saveCollection(_ key: String, _ meta: Collection.Meta, _ trackIds: [String]) {
         collections.removeAll { $0.key == key }
         collections.insert(Collection(key: key, meta: meta, ids: trackIds, at: Date().timeIntervalSince1970 * 1000), at: 0)
         save()
     }
     func removeCollection(_ key: String) { collections.removeAll { $0.key == key }; save() }
-    func wipe() { for t in tracks { try? FileManager.default.removeItem(at: file(t.id)) }; tracks = []; ids = []; collections = []; save() }
+    func wipe() { for t in tracks { try? FileManager.default.removeItem(at: file(t.id)) }; tracks = []; ids = []; kept = []; collections = []; save() }
 
     private func save() {
         try? JSONEncoder().encode(tracks).write(to: index, options: .atomic)
         try? JSONEncoder().encode(collections).write(to: colIndex, options: .atomic)
+        saveSmart()
+        Spotlight.schedule()
     }
 
     // MARK: téléchargement automatique : collections à jour, option « Titres J'aime hors ligne »
@@ -136,6 +183,7 @@ import Observation
     func autoSync(force: Bool = false) async {
         guard online, force || Date().timeIntervalSince(syncAt) > 30 * 60 else { return }
         if Store.get("auto-wifi", true) && cellular { return }
+        if ProcessInfo.processInfo.isLowPowerModeEnabled && !force { return }
         syncAt = Date()
         var cols = collections
         if Store.get("auto-liked", false) && !cols.contains(where: { $0.key == "playlist:LM" }) {
@@ -149,6 +197,7 @@ import Observation
             if !missing.isEmpty { download(missing); added += missing.count }
             if !missing.isEmpty || ok.count != c.ids.count { saveCollection(c.key, c.meta, ok.map(\.id)) }
         }
+        enforceQuota()
         if added > 0 { Toast.show("\(added) nouveau\(added > 1 ? "x" : "") titre\(added > 1 ? "s" : "") en téléchargement", .info) }
     }
 }
@@ -200,7 +249,8 @@ final class BackgroundDL: NSObject, URLSessionDownloadDelegate, @unchecked Senda
     }
     func urlSession(_ s: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
         guard let error, let id = task.taskDescription else { return }
-        Task { @MainActor in Offline.shared.failed(id, error.localizedDescription) }
+        let network = (error as? URLError).map { $0.code != .cancelled } ?? false
+        Task { @MainActor in Offline.shared.failed(id, error.localizedDescription, network: network) }
     }
     func urlSessionDidFinishEvents(forBackgroundURLSession session: URLSession) {
         DispatchQueue.main.async { self.completion?(); self.completion = nil }

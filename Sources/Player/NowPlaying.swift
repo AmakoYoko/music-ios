@@ -25,7 +25,7 @@ import UIKit
     }
 
     static func update(_ p: Player) {
-        guard let t = p.current else { MPNowPlayingInfoCenter.default().nowPlayingInfo = nil; SharedNow.write(nil); return }
+        guard let t = p.current else { MPNowPlayingInfoCenter.default().nowPlayingInfo = nil; SharedNow.write(nil); NowActivity.end(); return }
         // widget : seulement quand le titre ou l'état change
         let key = "\(t.id)\(p.playing)\(t.title)"
         if key != shared { shared = key; SharedNow.write(.init(title: t.title, artist: t.artistLine, playing: p.playing, live: t.isLive, id: t.id)) }
@@ -49,6 +49,7 @@ import UIKit
         c.previousTrackCommand.isEnabled = !live
         c.changePlaybackPositionCommand.isEnabled = !live
         c.likeCommand.isActive = Library.shared.liked.contains(t.id)
+        NowActivity.update(p, art: art?.id == t.thumb ? t.thumb : "")
     }
 
     /// Position recalée de temps en temps (l'écran verrouillé extrapole entre deux).
@@ -66,6 +67,9 @@ import UIKit
             art = (key, MPMediaItemArtwork(boundsSize: img.size) { _ in img })
             if let f = SharedNow.artURL, let d = (img.preparingThumbnail(of: CGSize(width: 300, height: 300)) ?? img).jpegData(compressionQuality: 0.8) {
                 try? d.write(to: f, options: .atomic); shared = ""
+            }
+            if let f = SharedNow.smallArtURL, let d = img.preparingThumbnail(of: CGSize(width: 120, height: 120))?.jpegData(compressionQuality: 0.7) {
+                try? d.write(to: f, options: .atomic)
             }
             if p.current?.thumb == key { update(p) }
         }
