@@ -83,10 +83,10 @@ import Observation
         do {
             let tmp = Self.dir.appendingPathComponent("\(t.id).part")
             let prog = DownloadProgress { p in Task { @MainActor in Offline.shared.jobs[t.id]?.progress = p } }
-            let (file, resp) = try await API.shared.session.download(from: url, delegate: prog)
+            let (dl, resp) = try await API.shared.session.download(from: url, delegate: prog)
             guard (resp as? HTTPURLResponse)?.statusCode == 200 else { throw APIError(code: (resp as? HTTPURLResponse)?.statusCode ?? 0, message: "téléchargement refusé") }
             try? FileManager.default.removeItem(at: tmp)
-            try FileManager.default.moveItem(at: file, to: tmp)
+            try FileManager.default.moveItem(at: dl, to: tmp)
             try await AudioFiles.makeReadable(tmp)
             try? FileManager.default.removeItem(at: file(t.id))
             try FileManager.default.moveItem(at: tmp, to: file(t.id))
