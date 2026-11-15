@@ -103,7 +103,6 @@ struct SettingsPage: View {
                 HStack { SettingLabel("Nom de cet appareil", "Affiché dans « Appareil de sortie » sur tes autres appareils", "iphone"); TextField("Nom", text: $devName).multilineTextAlignment(.trailing).onSubmit { if !devName.isEmpty { live.rename(devName) } } }
                 Button { Router.shared.present(.devices) } label: { SettingLabel("Appareils connectés", live.devices.map { $0.name + ($0.id == live.activeId ? " (lecture)" : "") }.joined(separator: " · ").ifEmpty("aucun"), "hifispeaker") }
                 Toggle(isOn: $autoCar) { SettingLabel("Basculer sur la voiture", "Quand la voiture se connecte, la lecture en cours sur cet appareil passe dessus", "car") }.onChange(of: autoCar) { Store.set("auto-car", autoCar) }
-                Button { Store.set("car-mode", true); Router.shared.carMode = true } label: { SettingLabel("Mode voiture", "Interface simplifiée, gros boutons, pour le téléphone posé sur son support. On en sort depuis ses réglages.", "car.side") }
             }
             Section("Application") {
                 Button { Task { await checkUpdate() } } label: { SettingLabel("Mise à jour de l'appli", update ?? "Version \(appVersion) · les mises à jour arrivent par SideStore", "arrow.triangle.2.circlepath") }

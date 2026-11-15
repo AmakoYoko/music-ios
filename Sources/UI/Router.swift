@@ -43,7 +43,6 @@ enum Tab: Hashable { case home, explore, library, downloads, search }
     var paths: [Tab: NavigationPath] = [.home: .init(), .explore: .init(), .library: .init(), .downloads: .init(), .search: .init()]
     var nowPlaying = false
     var listening = false
-    var carMode = Store.get("car-mode", false)
     var sheet: Sheet?
     var confirm: Confirm?
 

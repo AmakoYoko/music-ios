@@ -29,7 +29,7 @@ struct Main: View {
 
     var body: some View {
         Group {
-            if router.carMode { CarModeView() } else { tabs }
+            tabs
         }
         .overlay(alignment: .top) { ToastView(item: toast.current) }
         // une seule fenêtre à la fois : par-dessus le lecteur quand il est ouvert (sinon iOS ferme le lecteur pour l'afficher)
@@ -57,7 +57,7 @@ struct Main: View {
             guard !started else { return }
             started = true
             // lancement d'une liste : le lecteur plein écran s'ouvre tout de suite
-            player.on { w in if w == "start" && !Router.shared.carMode { Router.shared.nowPlaying = true } }
+            player.on { w in if w == "start" { Router.shared.nowPlaying = true } }
             player.restore()
             Live.shared.start()
             await Library.shared.loadAccount(cached: true)
