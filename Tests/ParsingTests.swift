@@ -223,3 +223,12 @@ final class AudioTests: XCTestCase {
         d.unload()
     }
 }
+
+final class LinkTests: XCTestCase {
+    func testLooksLikeLink() {
+        XCTAssertNotNil(Links.looksLikeLink("https://music.youtube.com/watch?v=khnokW3Mw24"))
+        XCTAssertNotNil(Links.looksLikeLink("music.youtube.com/playlist?list=PL1"))
+        XCTAssertNotNil(Links.looksLikeLink("lamasmusic://album/MPREb"))
+        XCTAssertNil(Links.looksLikeLink("daft punk"))
+    }
+}

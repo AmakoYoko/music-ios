@@ -61,7 +61,7 @@ struct TrackRow: View {
                     .frame(maxHeight: .infinity).background(abs(dx) >= 72 ? Color.accent : Color.gray)
             }
         }
-        .onTapGesture { tap() }
+        .onTapGesture { UISelectionFeedbackGenerator().selectionChanged(); tap() }
         .simultaneousGesture(DragGesture(minimumDistance: 18).onChanged { v in
             guard t.available, abs(v.translation.width) > abs(v.translation.height) * 1.5 else { return }
             dx = max(-120, min(120, v.translation.width))

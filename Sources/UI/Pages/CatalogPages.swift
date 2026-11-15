@@ -41,6 +41,7 @@ struct SearchPage: View {
     private func go(_ s: String) {
         let t = s.trimmingCharacters(in: .whitespaces)
         guard !t.isEmpty else { return }
+        if let u = Links.looksLikeLink(t), Links.open(u) { query = ""; return }
         Router.shared.open(.search(t, ""))
     }
 }

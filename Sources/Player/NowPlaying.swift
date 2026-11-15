@@ -5,6 +5,7 @@ import UIKit
 @MainActor enum NowPlaying {
     private static var art: (id: String, a: MPMediaItemArtwork)?
     private static var lastTick = Date.distantPast
+    private static var shared = ""
 
     static func setup(_ p: Player) {
         let c = MPRemoteCommandCenter.shared()
@@ -24,7 +25,10 @@ import UIKit
     }
 
     static func update(_ p: Player) {
-        guard let t = p.current else { MPNowPlayingInfoCenter.default().nowPlayingInfo = nil; return }
+        guard let t = p.current else { MPNowPlayingInfoCenter.default().nowPlayingInfo = nil; SharedNow.write(nil); return }
+        // widget : seulement quand le titre ou l'état change
+        let key = "\(t.id)\(p.playing)\(t.title)"
+        if key != shared { shared = key; SharedNow.write(.init(title: t.title, artist: t.artistLine, playing: p.playing, live: t.isLive, id: t.id)) }
         let live = t.isLive
         var info: [String: Any] = [
             MPMediaItemPropertyTitle: t.title,
@@ -60,6 +64,9 @@ import UIKit
         Task {
             guard let img = await ImageCache.shared.image(u) else { return }
             art = (key, MPMediaItemArtwork(boundsSize: img.size) { _ in img })
+            if let f = SharedNow.artURL, let d = (img.preparingThumbnail(of: CGSize(width: 300, height: 300)) ?? img).jpegData(compressionQuality: 0.8) {
+                try? d.write(to: f, options: .atomic); shared = ""
+            }
             if p.current?.thumb == key { update(p) }
         }
     }

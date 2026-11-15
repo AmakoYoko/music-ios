@@ -7,7 +7,9 @@ targets:
   LamasMusic:
     type: application
     platform: iOS
-    sources: [Sources]
+    sources: [Sources, Shared]
+    dependencies:
+      - target: MusicWidget
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: one.lamas.music
@@ -19,6 +21,7 @@ targets:
         GENERATE_INFOPLIST_FILE: YES
         CODE_SIGNING_ALLOWED: NO
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        CODE_SIGN_ENTITLEMENTS: Resources/app.entitlements
     info:
       path: Sources/Info.plist
       properties:
@@ -30,6 +33,27 @@ targets:
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
         CFBundleURLTypes:
           - CFBundleURLSchemes: [lamasmusic]
+  MusicWidget:
+    type: app-extension
+    platform: iOS
+    sources: [Widget, Shared]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: one.lamas.music.widget
+        MARKETING_VERSION: "1.0"
+        SWIFT_VERSION: "5.0"
+        SWIFT_STRICT_CONCURRENCY: minimal
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: WIDGET
+        TARGETED_DEVICE_FAMILY: "1"
+        GENERATE_INFOPLIST_FILE: YES
+        CODE_SIGNING_ALLOWED: NO
+        CODE_SIGN_ENTITLEMENTS: Resources/app.entitlements
+    info:
+      path: Widget/Info.plist
+      properties:
+        CFBundleDisplayName: Music
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
   LamasMusicTests:
     type: bundle.unit-test
     platform: iOS

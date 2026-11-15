@@ -6,7 +6,7 @@ struct MiniPlayer: View {
     var body: some View {
         if let t = p.current {
             HStack(spacing: 10) {
-                RemoteImage(url: t.thumbURL).frame(width: 40, height: 40).cardShape(6)
+                RemoteImage(url: t.thumbURL).frame(width: 40, height: 40).cardShape(6).modifier(ZoomSource())
                 VStack(alignment: .leading, spacing: 1) {
                     Text(t.title).font(.subheadline.weight(.semibold)).lineLimit(1)
                     if !live.targetName.isEmpty { Label("Lecture sur \(live.targetName)", systemImage: "hifispeaker.fill").font(.caption).foregroundStyle(Color.accent).lineLimit(1) }
@@ -20,6 +20,7 @@ struct MiniPlayer: View {
             .padding(.horizontal, 12).padding(.vertical, 6)
             .contentShape(Rectangle())
             .onTapGesture { Router.shared.nowPlaying = true }
+            .sensoryFeedback(.selection, trigger: p.idx)
             .gesture(DragGesture(minimumDistance: 30).onEnded { v in
                 if abs(v.translation.width) > 70 && abs(v.translation.width) > abs(v.translation.height) { v.translation.width < 0 ? p.next() : p.prev() }
                 else if v.translation.height < -40 { Router.shared.nowPlaying = true }
@@ -99,6 +100,11 @@ struct NowPlayingView: View {
                 })
             }
             .tint(.white)
+            .sensoryFeedback(.impact(weight: .light), trigger: p.playing)
+            .sensoryFeedback(.selection, trigger: p.idx)
+            .sensoryFeedback(.success, trigger: lib.liked.contains(t.id)) { _, on in on }
+            .sensoryFeedback(.selection, trigger: scrub == nil)
+            .sensoryFeedback(.impact(weight: .light), trigger: panel)
             .task(id: t.thumb) {
                 if let u = t.thumbURL, let i = await ImageCache.shared.image(u) { withAnimation(.easeInOut(duration: 1)) { colors = ImageCache.shared.palette(i) } }
             }

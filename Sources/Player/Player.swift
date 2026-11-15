@@ -51,6 +51,9 @@ import UIKit
     private var versions: [String: Track] = [:]
     private var ticker: Timer?
     private var liveItem: AVPlayer?
+    /// Démarrage instantané : le titre joue en flux (AVPlayer) le temps que son fichier arrive, puis passe sur le moteur.
+    private var streamer: AVPlayer?
+    private var streamEnd: Any?
     private var listeners: [UUID: (String) -> Void] = [:]
     private var lastPrefetch = ""
     private var radioBusy = false
@@ -189,7 +192,7 @@ import UIKit
         if Live.shared.forward("play", [], claim: true) { return }
         guard let t = current else { return }
         if t.isLive && liveItem == nil { return load(autoplay: true) }
-        if A.file == nil && !t.isLive { return load(autoplay: true, at: time) }
+        if A.file == nil && !t.isLive && streamer == nil { return load(autoplay: true, at: time) }
         resumeLocal()
     }
     func pause() {
@@ -200,6 +203,7 @@ import UIKit
         wanted = true
         try? AVAudioSession.sharedInstance().setActive(true)
         if let l = liveItem { l.play(); playing = true; changed(); return }
+        if let s = streamer { s.play(); playing = true; changed(); return }
         audio.start()
         A.resume()
         playing = true
@@ -208,6 +212,7 @@ import UIKit
     private func pauseLocal(keepWanted: Bool) {
         if !keepWanted { wanted = false }
         liveItem?.pause()
+        streamer?.pause()
         if fading { finishFadeNow() }
         A.pause()
         playing = false
@@ -249,7 +254,9 @@ import UIKit
         if fading { finishFadeNow() }
         resetMix()
         let wasPlaying = playing
-        if A.file != nil {
+        if let st = streamer, A.file == nil || A.id != current?.id {
+            st.seek(to: CMTime(seconds: s, preferredTimescale: 600))
+        } else if A.file != nil {
             A.schedule(from: s, to: trimNow(current)?["end"].double)
             if !wasPlaying { A.pause() }
         }
@@ -259,7 +266,7 @@ import UIKit
     }
     func setVolume(_ v: Double) {
         if Live.shared.forward("setVolume", [.num(v)]) { volume = v; return }
-        volume = v; Store.set("volume", v); audio.bus.outputVolume = Float(v) }
+        volume = v; Store.set("volume", v); audio.bus.outputVolume = Float(v); streamer?.volume = Float(v) }
 
     func toggleShuffle(_ on: Bool? = nil) {
         if on == nil, Live.shared.forward("toggleShuffle", []) { return }
@@ -355,6 +362,7 @@ import UIKit
         mixPlan = nil
         fading = false
         liveItem?.pause(); liveItem = nil
+        stopStreamer()
         wanted = ap
         reported.remove(t.id)
         time = at
@@ -383,7 +391,14 @@ import UIKit
             if start == 0, smart, let s = tr?["start"].double { start = s }
             do {
                 if !ready {
+                    if ap && AudioFiles.shared.cached(t.id) == nil { startStreamer(t, at: start) }
                     let f = try await AudioFiles.shared.file(t.id)
+                    // le flux a avancé pendant le téléchargement : le moteur reprend au même endroit
+                    if let st = streamer, seq == loadSeq {
+                        let pos = st.currentTime().seconds
+                        if pos.isFinite && pos > 0.2 { start = pos + 0.05 }
+                        if st.rate == 0 && st.timeControlStatus == .paused && !loading { wanted = false }
+                    }
                     guard seq == loadSeq else { return }
                     try A.load(f, id: t.id, engine: audio.engine)
                 } else {
@@ -397,6 +412,7 @@ import UIKit
                 audio.start()
                 A.schedule(from: start, to: smart ? tr?["end"].double : nil)
                 if !wanted { A.pause() } else { try? AVAudioSession.sharedInstance().setActive(true) }
+                stopStreamer()
                 time = start
                 loading = false
                 playing = wanted
@@ -407,6 +423,7 @@ import UIKit
                 prefetch()
             } catch {
                 guard seq == loadSeq else { return }
+                if streamer != nil { return } // le flux continue : le titre reste écoutable sans son fichier
                 loading = false
                 if (error as? APIError)?.code == 401 { playing = false; changed(); return }
                 Toast.show("Lecture impossible : \(t.title)", .err)
@@ -414,6 +431,28 @@ import UIKit
                 if seq == loadSeq { next(auto: true) }
             }
         }
+    }
+
+    private func startStreamer(_ t: Track, at: Double) {
+        stopStreamer()
+        let url = baseURL.appendingPathComponent("api/audio/\(t.id)")
+        let asset = AVURLAsset(url: url, options: [AVURLAssetHTTPCookiesKey: HTTPCookieStorage.shared.cookies(for: baseURL) ?? []])
+        let item = AVPlayerItem(asset: asset)
+        item.preferredForwardBufferDuration = 4
+        let s = AVPlayer(playerItem: item)
+        s.volume = Float(volume)
+        if at > 0 { s.seek(to: CMTime(seconds: at, preferredTimescale: 600)) }
+        streamer = s
+        streamEnd = NotificationCenter.default.addObserver(forName: .AVPlayerItemDidPlayToEndTime, object: item, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { if self?.streamer === s { self?.next(auto: true) } }
+        }
+        try? AVAudioSession.sharedInstance().setActive(true)
+        s.play()
+    }
+    private func stopStreamer() {
+        streamer?.pause()
+        streamer = nil
+        if let o = streamEnd { NotificationCenter.default.removeObserver(o); streamEnd = nil }
     }
 
     /// Le moteur a été reconfiguré (sortie audio changée) : reprise au même endroit.
@@ -478,6 +517,12 @@ import UIKit
         guard let t = current else { return }
         if let l = liveItem {
             let p = l.timeControlStatus == .playing
+            if loading && p { loading = false; changed() }
+            return
+        }
+        if let st = streamer, A.id != t.id || A.file == nil {
+            let p = st.timeControlStatus == .playing
+            if p { time = st.currentTime().seconds }
             if loading && p { loading = false; changed() }
             return
         }
@@ -713,7 +758,7 @@ import UIKit
     }
     /// Affiche l'état d'un autre appareil sans jouer ici (miroir).
     func applyMirror(_ st: JSON, time tf: @escaping () -> Double) {
-        if playing || A.isPlaying || liveItem != nil { liveItem?.pause(); liveItem = nil; A.pause(); B.stop() }
+        if playing || A.isPlaying || liveItem != nil || streamer != nil { liveItem?.pause(); liveItem = nil; stopStreamer(); A.pause(); B.stop() }
         queue = st["queue"].array.compactMap { $0.decode(Track.self) }
         idx = st["idx"].int ?? 0
         playing = st["playing"].bool ?? false

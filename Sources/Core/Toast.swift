@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 import Observation
 
 /// Bannières façon iOS (remplacent les toasts du socle).
@@ -17,6 +18,7 @@ import Observation
     }
     private func present(_ i: Item, _ s: Double) {
         current = i
+        if i.kind == .err { UINotificationFeedbackGenerator().notificationOccurred(.error) }
         task?.cancel()
         task = Task { try? await Task.sleep(nanoseconds: UInt64(s * 1e9)); if !Task.isCancelled { current = nil } }
     }

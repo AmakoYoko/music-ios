@@ -15,8 +15,6 @@ import Observation
     private(set) var tracks: [Track] = []
     private(set) var collections: [Collection] = []
     private(set) var jobs: [String: Job] = [:]
-    private var pending: [Track] = []
-    private var active = 0
     private var ids = Set<String>()
     private var syncAt = Date.distantPast
     private let monitor = NWPathMonitor()
@@ -58,48 +56,51 @@ import Observation
     var freeSpace: Int64 { (try? URL(fileURLWithPath: NSHomeDirectory()).resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]).volumeAvailableCapacityForImportantUsage) ?? 0 }
 
     func download(_ ts: [Track]) {
+        var started = false
         for t in ts where !t.id.isEmpty && !ids.contains(t.id) && jobs[t.id] == nil && t.available && !t.isLive {
             jobs[t.id] = Job(progress: 0, track: t)
-            pending.append(t)
+            BackgroundDL.shared.start(t)
+            started = true
         }
-        pump()
+        if started { saveJobs() }
     }
 
-    private func pump() {
-        while active < 2, !pending.isEmpty {
-            let t = pending.removeFirst()
-            active += 1
-            Task {
-                await fetch(t)
-                active -= 1
-                jobs[t.id] = nil
-                pump()
-            }
-        }
-    }
-
-    private func fetch(_ t: Track) async {
-        let url = baseURL.appendingPathComponent("api/download/\(t.id)")
+    /// Fichier arrivé (même appli fermée : iOS relance l'appli en arrière-plan pour le ranger).
+    func finished(_ id: String, part: URL) async {
+        defer { jobs[id] = nil; saveJobs() }
+        guard let t = jobs[id]?.track ?? pendingMeta()[id] else { try? FileManager.default.removeItem(at: part); return }
         do {
-            let tmp = Self.dir.appendingPathComponent("\(t.id).part")
-            let prog = DownloadProgress { p in Task { @MainActor in Offline.shared.jobs[t.id]?.progress = p } }
-            let (dl, resp) = try await API.shared.session.download(from: url, delegate: prog)
-            guard (resp as? HTTPURLResponse)?.statusCode == 200 else { throw APIError(code: (resp as? HTTPURLResponse)?.statusCode ?? 0, message: "téléchargement refusé") }
-            try? FileManager.default.removeItem(at: tmp)
-            try FileManager.default.moveItem(at: dl, to: tmp)
-            try await AudioFiles.makeReadable(tmp)
-            try? FileManager.default.removeItem(at: file(t.id))
-            try FileManager.default.moveItem(at: tmp, to: file(t.id))
+            try await AudioFiles.makeReadable(part)
+            try? FileManager.default.removeItem(at: file(id))
+            try FileManager.default.moveItem(at: part, to: file(id))
             var x = t.plain; x.auto = nil
-            tracks.removeAll { $0.id == t.id }
+            tracks.removeAll { $0.id == id }
             tracks.insert(x, at: 0)
-            ids.insert(t.id)
+            ids.insert(id)
             save()
         } catch {
-            try? FileManager.default.removeItem(at: Self.dir.appendingPathComponent("\(t.id).part"))
-            if online { Toast.show("Téléchargement impossible : \(t.title)", .err) }
+            try? FileManager.default.removeItem(at: part)
+            Toast.show("Téléchargement impossible : \(t.title)", .err)
         }
     }
+    func failed(_ id: String, _ message: String?) {
+        let t = jobs[id]?.track
+        jobs[id] = nil
+        saveJobs()
+        if online, let t { Toast.show("Téléchargement impossible : \(t.title)", .err) }
+    }
+    func progress(_ id: String, _ p: Double) { jobs[id]?.progress = p }
+
+    /// Téléchargements lancés avant la fermeture de l'appli : on les retrouve.
+    func restoreJobs() async {
+        let meta = pendingMeta()
+        let running = await BackgroundDL.shared.runningIds()
+        for (id, t) in meta where running.contains(id) && jobs[id] == nil { jobs[id] = Job(progress: 0, track: t) }
+        saveJobs()
+    }
+    private var jobsFile: URL { Self.dir.appendingPathComponent("jobs.json") }
+    private func pendingMeta() -> [String: Track] { (try? JSONDecoder().decode([String: Track].self, from: Data(contentsOf: jobsFile))) ?? [:] }
+    private func saveJobs() { try? JSONEncoder().encode(jobs.mapValues(\.track)).write(to: jobsFile, options: .atomic) }
 
     func remove(_ id: String) {
         try? FileManager.default.removeItem(at: file(id))
@@ -152,15 +153,56 @@ import Observation
     }
 }
 
-/// Progression d'un téléchargement (barre des Téléchargés).
-final class DownloadProgress: NSObject, URLSessionDownloadDelegate, @unchecked Sendable {
-    let on: (Double) -> Void
-    private var last = Date.distantPast
-    init(_ on: @escaping (Double) -> Void) { self.on = on }
-    func urlSession(_ s: URLSession, downloadTask: URLSessionDownloadTask, didWriteData _: Int64, totalBytesWritten w: Int64, totalBytesExpectedToWrite e: Int64) {
-        guard e > 0, Date().timeIntervalSince(last) > 0.3 else { return }
-        last = Date()
-        on(Double(w) / Double(e))
+/// Session de transfert iOS : les téléchargements continuent appli fermée.
+final class BackgroundDL: NSObject, URLSessionDownloadDelegate, @unchecked Sendable {
+    static let shared = BackgroundDL()
+    static let id = "one.lamas.music.downloads"
+    var completion: (() -> Void)?
+    private var last: [String: Date] = [:]
+    private let lock = NSLock()
+
+    lazy var session: URLSession = {
+        let c = URLSessionConfiguration.background(withIdentifier: Self.id)
+        c.sessionSendsLaunchEvents = true
+        c.isDiscretionary = false
+        c.httpCookieStorage = .shared
+        c.httpMaximumConnectionsPerHost = 3
+        c.timeoutIntervalForResource = 60 * 60 * 6
+        return URLSession(configuration: c, delegate: self, delegateQueue: nil)
+    }()
+
+    func start(_ t: Track) {
+        var req = URLRequest(url: baseURL.appendingPathComponent("api/download/\(t.id)"))
+        for (k, v) in Session.cookieHeader { req.setValue(v, forHTTPHeaderField: k) }
+        let task = session.downloadTask(with: req)
+        task.taskDescription = t.id
+        task.resume()
     }
-    func urlSession(_ s: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL) {}
+    func runningIds() async -> Set<String> { Set(await session.allTasks.compactMap(\.taskDescription)) }
+
+    func urlSession(_ s: URLSession, downloadTask: URLSessionDownloadTask, didWriteData _: Int64, totalBytesWritten w: Int64, totalBytesExpectedToWrite e: Int64) {
+        guard let id = downloadTask.taskDescription, e > 0 else { return }
+        lock.lock()
+        let ok = Date().timeIntervalSince(last[id] ?? .distantPast) > 0.3
+        if ok { last[id] = Date() }
+        lock.unlock()
+        if ok { Task { @MainActor in Offline.shared.progress(id, Double(w) / Double(e)) } }
+    }
+    func urlSession(_ s: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL) {
+        guard let id = downloadTask.taskDescription else { return }
+        let code = (downloadTask.response as? HTTPURLResponse)?.statusCode ?? 0
+        guard code == 200 else { Task { @MainActor in Offline.shared.failed(id, "erreur \(code)") }; return }
+        // le fichier temporaire disparaît au retour de cette fonction : on le range tout de suite
+        let part = Offline.dir.appendingPathComponent("\(id).part")
+        try? FileManager.default.removeItem(at: part)
+        do { try FileManager.default.moveItem(at: location, to: part) } catch { Task { @MainActor in Offline.shared.failed(id, nil) }; return }
+        Task { @MainActor in await Offline.shared.finished(id, part: part) }
+    }
+    func urlSession(_ s: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        guard let error, let id = task.taskDescription else { return }
+        Task { @MainActor in Offline.shared.failed(id, error.localizedDescription) }
+    }
+    func urlSessionDidFinishEvents(forBackgroundURLSession session: URLSession) {
+        DispatchQueue.main.async { self.completion?(); self.completion = nil }
+    }
 }

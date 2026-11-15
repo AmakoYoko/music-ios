@@ -3,8 +3,17 @@ import SwiftUI
 
 @main
 struct MusicApp: App {
+    @UIApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     init() { Session.install() }
     var body: some Scene { WindowGroup { Root().tint(.accent) } }
+}
+
+final class AppDelegate: NSObject, UIApplicationDelegate {
+    /// iOS réveille l'appli quand des téléchargements de fond se terminent.
+    func application(_ application: UIApplication, handleEventsForBackgroundURLSession identifier: String, completionHandler: @escaping () -> Void) {
+        BackgroundDL.shared.completion = completionHandler
+        _ = BackgroundDL.shared.session
+    }
 }
 
 struct Root: View {
@@ -25,6 +34,7 @@ struct Main: View {
     @State private var toast = Toast.shared
     @State private var prompt = Prompt.shared
     @State private var started = false
+    @Namespace private var npZoom
     @Environment(\.scenePhase) private var phase
 
     var body: some View {
@@ -36,6 +46,7 @@ struct Main: View {
         .sheet(item: Binding(get: { router.nowPlaying || router.listening ? nil : router.sheet }, set: { router.sheet = $0 })) { s in sheet(s) }
         .fullScreenCover(isPresented: $router.nowPlaying) {
             NowPlayingView()
+                .modifier(ZoomDestination(ns: npZoom))
                 .sheet(item: Binding(get: { router.nowPlaying ? router.sheet : nil }, set: { router.sheet = $0 })) { s in sheet(s) }
                 .alert(router.confirm?.title ?? "", isPresented: Binding(get: { router.confirm != nil }, set: { if !$0 { router.confirm = nil } }), presenting: router.confirm) { c in
                     Button(c.ok, role: c.danger ? .destructive : nil) { c.run() }
@@ -60,6 +71,7 @@ struct Main: View {
             player.on { w in if w == "start" { Router.shared.nowPlaying = true } }
             player.restore()
             Live.shared.start()
+            await Offline.shared.restoreJobs()
             await Library.shared.loadAccount(cached: true)
             await Library.shared.refreshMine()
             try? await Task.sleep(nanoseconds: 10_000_000_000)
@@ -68,6 +80,7 @@ struct Main: View {
         .onChange(of: phase) {
             guard phase == .active else { if phase == .background { player.save(now: true) }; return }
             if !Live.shared.connected { Live.shared.connect() }
+            Links.offerClipboard()
             Task { await Offline.shared.autoSync() }
         }
     }
@@ -92,6 +105,8 @@ struct Main: View {
             stack(.search) { SearchPage() }.tabItem { Label("Recherche", systemImage: "magnifyingglass") }.tag(Tab.search)
         }
         .modifier(MiniPlayerHost(show: player.current != nil))
+        .environment(\.npZoom, npZoom)
+        .onOpenURL { Links.open($0) }
     }
 
     func stack<V: View>(_ t: Tab, @ViewBuilder _ root: () -> V) -> some View {
@@ -176,5 +191,22 @@ struct LoginView: View {
         }
         s.presentationContextProvider = ctx
         s.start()
+    }
+}
+
+/// Transition « zoom » d'iOS 18 : la pochette du mini-lecteur grandit jusqu'au lecteur plein écran.
+private struct NPZoomKey: EnvironmentKey { static let defaultValue: Namespace.ID? = nil }
+extension EnvironmentValues { var npZoom: Namespace.ID? { get { self[NPZoomKey.self] } set { self[NPZoomKey.self] = newValue } } }
+
+struct ZoomDestination: ViewModifier {
+    var ns: Namespace.ID
+    func body(content: Content) -> some View {
+        if #available(iOS 18.0, *) { content.navigationTransition(.zoom(sourceID: "np", in: ns)) } else { content }
+    }
+}
+struct ZoomSource: ViewModifier {
+    @Environment(\.npZoom) private var ns
+    func body(content: Content) -> some View {
+        if #available(iOS 18.0, *), let ns { content.matchedTransitionSource(id: "np", in: ns) } else { content }
     }
 }
