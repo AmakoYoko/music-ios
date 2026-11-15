@@ -224,7 +224,7 @@ final class AudioTests: XCTestCase {
     }
 }
 
-final class LinkTests: XCTestCase {
+@MainActor final class LinkTests: XCTestCase {
     func testLooksLikeLink() {
         XCTAssertNotNil(Links.looksLikeLink("https://music.youtube.com/watch?v=khnokW3Mw24"))
         XCTAssertNotNil(Links.looksLikeLink("music.youtube.com/playlist?list=PL1"))
