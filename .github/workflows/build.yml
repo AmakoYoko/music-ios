@@ -50,7 +50,8 @@ jobs:
                 localizedDescription: "Lecteur Lamas Music.", iconURL: "\($base)/icon.png", tintColor: "fa233b",
                 versions: [{ version: $v, buildVersion: $b, date: $date, size: $size,
                   downloadURL: "\($base)/LamasMusic.ipa", localizedDescription: $msg, minOSVersion: "17.0" }],
-                appPermissions: { entitlements: [], privacy: {} } }],
+                appPermissions: { entitlements: ["com.apple.security.application-groups"],
+                  privacy: { NSMicrophoneUsageDescription: "Music écoute quelques secondes pour reconnaître le titre qui passe." } } }],
               news: [] }' > source.json
           gh release delete latest -y --cleanup-tag || true
           gh release create latest LamasMusic.ipa source.json icon.png -t "Music ${{ github.run_number }}" -n "Build ${{ github.sha }}"
