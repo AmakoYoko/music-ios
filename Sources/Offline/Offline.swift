@@ -81,23 +81,12 @@ import Observation
     private func fetch(_ t: Track) async {
         let url = baseURL.appendingPathComponent("api/download/\(t.id)")
         do {
-            let (stream, resp) = try await API.shared.session.bytes(from: url)
-            guard (resp as? HTTPURLResponse)?.statusCode == 200 else { throw APIError(code: (resp as? HTTPURLResponse)?.statusCode ?? 0, message: "téléchargement refusé") }
-            let total = resp.expectedContentLength
             let tmp = Self.dir.appendingPathComponent("\(t.id).part")
-            FileManager.default.createFile(atPath: tmp.path, contents: nil)
-            let h = try FileHandle(forWritingTo: tmp)
-            var buf = Data(); buf.reserveCapacity(1 << 16)
-            var got: Int64 = 0, lastUI = Date()
-            for try await b in stream {
-                buf.append(b)
-                if buf.count >= 1 << 16 {
-                    try h.write(contentsOf: buf); got += Int64(buf.count); buf.removeAll(keepingCapacity: true)
-                    if total > 0, Date().timeIntervalSince(lastUI) > 0.3 { lastUI = Date(); jobs[t.id]?.progress = Double(got) / Double(total) }
-                }
-            }
-            try h.write(contentsOf: buf)
-            try h.close()
+            let prog = DownloadProgress { p in Task { @MainActor in Offline.shared.jobs[t.id]?.progress = p } }
+            let (file, resp) = try await API.shared.session.download(from: url, delegate: prog)
+            guard (resp as? HTTPURLResponse)?.statusCode == 200 else { throw APIError(code: (resp as? HTTPURLResponse)?.statusCode ?? 0, message: "téléchargement refusé") }
+            try? FileManager.default.removeItem(at: tmp)
+            try FileManager.default.moveItem(at: file, to: tmp)
             try await AudioFiles.makeReadable(tmp)
             try? FileManager.default.removeItem(at: file(t.id))
             try FileManager.default.moveItem(at: tmp, to: file(t.id))
@@ -161,4 +150,17 @@ import Observation
         }
         if added > 0 { Toast.show("\(added) nouveau\(added > 1 ? "x" : "") titre\(added > 1 ? "s" : "") en téléchargement", .info) }
     }
+}
+
+/// Progression d'un téléchargement (barre des Téléchargés).
+final class DownloadProgress: NSObject, URLSessionDownloadDelegate, @unchecked Sendable {
+    let on: (Double) -> Void
+    private var last = Date.distantPast
+    init(_ on: @escaping (Double) -> Void) { self.on = on }
+    func urlSession(_ s: URLSession, downloadTask: URLSessionDownloadTask, didWriteData _: Int64, totalBytesWritten w: Int64, totalBytesExpectedToWrite e: Int64) {
+        guard e > 0, Date().timeIntervalSince(last) > 0.3 else { return }
+        last = Date()
+        on(Double(w) / Double(e))
+    }
+    func urlSession(_ s: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL) {}
 }

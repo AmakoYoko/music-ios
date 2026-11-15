@@ -92,7 +92,7 @@ struct NowPlayingView: View {
             .task(id: t.thumb) {
                 if let u = t.thumbURL, let i = await ImageCache.shared.image(u) { withAnimation(.easeInOut(duration: 0.8)) { colors = ImageCache.shared.palette(i) } }
             }
-            .gesture(DragGesture().onEnded { v in if v.translation.height > 110 && abs(v.translation.width) < 80 { dismiss() } })
+            .gesture(DragGesture().onEnded { v in if panel == nil && v.translation.height > 110 && abs(v.translation.width) < 80 { dismiss() } })
             .onReceive(NotificationCenter.default.publisher(for: .musicPlayerPanel)) { n in panel = n.object as? String }
         } else {
             Color.black.onAppear { dismiss() }

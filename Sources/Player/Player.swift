@@ -81,7 +81,7 @@ import UIKit
         }
         Task { if let v = try? await yt("/versions/prefs", fresh: true) { versions = v.object.compactMapValues { $0.decode(Track.self) } } }
         NowPlaying.setup(self)
-        ticker = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in MainActor.assumeIsolated { self?.tick() } }
+        ticker = Timer.common(withTimeInterval: 0.1, repeats: true) { [weak self] _ in MainActor.assumeIsolated { self?.tick() } }
     }
 
     // MARK: écouteurs (Live publie l'état à chaque changement)
@@ -589,7 +589,7 @@ import UIKit
         if automix { mixing = true; emit("automix") }
         let t0 = Date().addingTimeInterval(delay)
         fadeTimer?.invalidate()
-        fadeTimer = Timer.scheduledTimer(withTimeInterval: 0.03, repeats: true) { [weak self] tm in
+        fadeTimer = Timer.common(withTimeInterval: 0.03, repeats: true) { [weak self] tm in
             MainActor.assumeIsolated {
                 guard let self, self.fading else { tm.invalidate(); return }
                 let p = min(1, max(0, Date().timeIntervalSince(t0) / dur))
@@ -616,7 +616,7 @@ import UIKit
         func frac(_ x: Double) -> Double { x - floor(x) }
         var swapped = false
         fadeTimer?.invalidate()
-        fadeTimer = Timer.scheduledTimer(withTimeInterval: 0.03, repeats: true) { [weak self] tm in
+        fadeTimer = Timer.common(withTimeInterval: 0.03, repeats: true) { [weak self] tm in
             MainActor.assumeIsolated {
                 guard let self, self.fading else { tm.invalidate(); return }
                 let p = min(1, max(0, (from.time - plan.start) / dur))
@@ -640,7 +640,7 @@ import UIKit
                     self.completeFade()
                     // retour doux à la vitesse d'origine (30 s)
                     let r0 = to.rate, g0 = Date()
-                    Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { g in
+                    Timer.common(withTimeInterval: 0.2, repeats: true) { g in
                         MainActor.assumeIsolated {
                             guard self.A === to, !self.fading else { g.invalidate(); return }
                             let k = Float(min(1, Date().timeIntervalSince(g0) / 30))
@@ -727,4 +727,13 @@ import UIKit
         NowPlaying.update(self)
     }
     var hasLocalAudio: Bool { A.isPlaying || liveItem?.timeControlStatus == .playing }
+}
+
+extension Timer {
+    /// Minuteur qui continue pendant les défilements (mode « common » de la boucle principale).
+    @discardableResult static func common(withTimeInterval i: TimeInterval, repeats: Bool, block: @escaping @Sendable (Timer) -> Void) -> Timer {
+        let t = Timer(timeInterval: i, repeats: repeats, block: block)
+        RunLoop.main.add(t, forMode: .common)
+        return t
+    }
 }

@@ -127,8 +127,10 @@ final class AudioEngine {
         engine.connect(master, to: engine.mainMixerNode, format: nil)
         installTap()
         NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main) { [weak self] _ in
-            self?.start()
-            Player.shared.engineRestarted()
+            MainActor.assumeIsolated {
+                self?.start()
+                Player.shared.engineRestarted()
+            }
         }
     }
 

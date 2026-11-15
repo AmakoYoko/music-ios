@@ -15,7 +15,8 @@ final class AudioFiles: @unchecked Sendable {
     static let limit: Int64 = 1_500_000_000
 
     func cached(_ id: String) -> URL? {
-        if let f = Offline.shared.fileIfPresent(id) { return f }
+        let off = Offline.dir.appendingPathComponent("\(id).m4a")
+        if FileManager.default.fileExists(atPath: off.path) { return off }
         let f = dir.appendingPathComponent("\(id).m4a")
         if FileManager.default.fileExists(atPath: f.path) {
             try? FileManager.default.setAttributes([.modificationDate: Date()], ofItemAtPath: f.path)
